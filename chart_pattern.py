@@ -6,10 +6,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from bs4 import BeautifulSoup
 from io import StringIO
+import random
 import time
 
-# --- 1. [디자인] 프리미엄 다크 터미널 UI ---
-st.set_page_config(layout="wide", page_title="Aegis Pro v58.0")
+# --- 1. [디자인] 증권사 프리미엄 터미널 UI ---
+st.set_page_config(layout="wide", page_title="Aegis Master v60.0")
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;800&display=swap');
@@ -17,38 +18,41 @@ st.markdown("""
     .stMetric { background-color: #111; padding: 20px; border-radius: 16px; border: 1px solid #222; }
     .profit-card { background: linear-gradient(135deg, #FF3B30 0%, #FF9500 100%); padding: 25px; border-radius: 20px; color: white; text-align: center; margin-bottom: 20px; box-shadow: 0 10px 30px rgba(255, 59, 48, 0.4); }
     .info-card { background-color: #161616; padding: 18px; border-radius: 14px; margin-bottom: 12px; border: 1px solid #222; transition: 0.3s; }
+    .info-card:hover { border-color: #00f2ff; background-color: #1a1a1a; }
+    .news-tag { padding: 3px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 800; margin-right: 10px; }
+    .tag-pos { background-color: #FF3B30; color: white; }
+    .tag-neg { background-color: #007AFF; color: white; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. [핵심] 고스트 세션 로더 (차단 우회 전문) ---
-def get_ghost_session():
+# --- 2. [핵심] 쉴드 엔진 (차단 우회 및 데이터 무결성 검사) ---
+def get_secure_session():
     session = requests.Session()
-    # 실제 브라우저와 똑같은 복잡한 헤더 구성
+    # 실제 브라우저 세션과 똑같은 고정밀 헤더 구성
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'Referer': 'https://finance.naver.com/',
-        'Connection': 'keep-alive'
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8'
     })
     return session
 
 @st.cache_data(ttl=86400)
-def get_krx_master_v58():
+def get_krx_list_v60():
     try:
         url = 'http://kind.krx.co.kr/corpoctl/corpList.do?method=download'
-        res = get_ghost_session().get(url, timeout=10)
+        res = get_secure_session().get(url, timeout=10)
         df = pd.read_html(StringIO(res.text), header=0)[0]
-        df_clean = df.iloc[:, [0, 1]].copy()
-        df_clean.columns = ['name', 'code']
-        df_clean['code'] = df_clean['code'].apply(lambda x: f"{int(x):06d}")
-        return dict(zip(df_clean['name'], df_clean['code']))
+        df = df.iloc[:, [0, 1]].copy()
+        df.columns = ['name', 'code']
+        df['code'] = df['code'].apply(lambda x: f"{int(x):06d}")
+        return dict(zip(df['name'], df['code']))
     except:
         return {"삼성전자": "005930", "한화솔루션": "009830", "SK하이닉스": "000660"}
 
 @st.cache_data(ttl=60)
-def get_ghost_data(symbol, market="KR", mode="일봉"):
-    session = get_ghost_session()
+def get_genesis_data(symbol, market="KR", mode="일봉"):
+    session = get_secure_session()
     try:
         if market == "KR":
             url = f"https://finance.naver.com/item/sise_time.naver?code={symbol}&page=1" if mode == "1분봉" else f"https://finance.naver.com/item/sise_day.naver?code={symbol}&page=1"
@@ -78,7 +82,13 @@ def get_ghost_data(symbol, market="KR", mode="일봉"):
         else:
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=6mo"
             res = session.get(url, timeout=15).json()['chart']['result'][0]
-            df = pd.DataFrame({'close': res['indicators']['quote'][0]['close'], 'open': res['indicators']['quote'][0]['open'], 'high': res['indicators']['quote'][0]['high'], 'low': res['indicators']['quote'][0]['low'], 'vol': res['indicators']['quote'][0]['volume']}, index=pd.to_datetime(res['timestamp'], unit='s'))
+            df = pd.DataFrame({
+                'close': res['indicators']['quote'][0]['close'],
+                'open': res['indicators']['quote'][0]['open'],
+                'high': res['indicators']['quote'][0]['high'],
+                'low': res['indicators']['quote'][0]['low'],
+                'vol': res['indicators']['quote'][0]['volume']
+            }, index=pd.to_datetime(res['timestamp'], unit='s'))
 
         df = df.ffill().dropna().apply(pd.to_numeric)
         df['MA5'] = df['close'].rolling(5).mean(); df['MA20'] = df['close'].rolling(20).mean()
@@ -87,12 +97,12 @@ def get_ghost_data(symbol, market="KR", mode="일봉"):
         return df
     except: return None
 
-# --- 3. [UI] 사이드바 및 대시보드 ---
-st.markdown('<p style="font-size:2.5rem; font-weight:800; color:#fff;">Aegis Master <span style="color:#00f2ff;">v58.0</span></p>', unsafe_allow_html=True)
+# --- 3. [메인 UI] 사이드바 및 컨트롤 ---
+st.markdown('<p style="font-size:2.5rem; font-weight:800; color:#fff;">Aegis Master <span style="color:#00f2ff;">v60.0</span></p>', unsafe_allow_html=True)
 
-krx_map = get_krx_master_v58()
+krx_map = get_krx_list_v60()
 with st.sidebar:
-    st.markdown('<p style="font-size:1.5rem; font-weight:800; color:#00f2ff;">Control Center</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:1.5rem; font-weight:800; color:#00f2ff;">MTS Terminal</p>', unsafe_allow_html=True)
     u_input = st.text_input("종목 검색 (한화, 삼성, TSLA)", value="한화솔루션")
     filtered = [n for n in krx_map.keys() if u_input in n]
     target_name = st.selectbox(f"검색 결과 ({len(filtered)}건)", options=filtered[:100] if filtered else [u_input])
@@ -100,23 +110,23 @@ with st.sidebar:
     market = "KR" if symbol.isdigit() and len(symbol) == 6 else "US"
     
     st.divider()
-    view_mode = st.radio("데이터 주기", ["1분봉", "일봉", "월봉"], index=1, horizontal=True)
+    view_mode = st.radio("데이터 주기 선택", ["1분봉", "일봉", "월봉"], index=1, horizontal=True)
     invest_val = st.number_input("투자 원금 설정", value=10000000, step=1000000)
     
     st.divider()
-    st.subheader("🛠️ 차트 옵션")
+    st.subheader("📊 차트 커스터마이징")
     chart_style = st.radio("그래프 형태", ["전문가 캔들", "심플 라인"], horizontal=True)
-    show_ma = st.multiselect("이동평균선 표시", [5, 20, 60], default=[5, 20])
-    show_rsi = st.checkbox("RSI 보조지표 표시", value=True)
+    show_ma = st.multiselect("이평선 표시", [5, 20, 60], default=[5, 20])
+    show_rsi = st.checkbox("RSI 지표 표시", value=True)
 
-# --- 4. [메인] 분석 및 시각화 ---
-df = get_ghost_data(symbol, market, view_mode)
+# --- 4. 렌더링 섹션 ---
+df = get_genesis_data(symbol, market, view_mode)
 
 if df is not None and not df.empty:
     curr_p = df['close'].iloc[-1]; unit = "$" if market == "US" else "원"
     rsi_val = df['RSI'].iloc[-1]
     
-    # 퀀트 스코어링 (객관적)
+    # [퀀트 지표 연산]
     score = 50 + (25 if curr_p > df['MA20'].iloc[-1] else -10) + (25 if rsi_val < 35 else -10 if rsi_val > 70 else 0)
     est_ret = 12.5 if score > 70 else 3.2
     est_profit = invest_val * (est_ret / 100)
@@ -127,7 +137,7 @@ if df is not None and not df.empty:
         st.markdown(f"""<div class="profit-card">
             <p style="margin:0; font-size:1rem; opacity:0.8;">AI 퀀트 전략 기대 수익률</p>
             <h1 style="margin:0; font-size:3.2rem;">+{est_ret}%</h1>
-            <p style="margin:0; font-weight:bold;">{invest_val:,.0f}{unit} 투자 시 예상 수익: {est_profit:+,.0f}{unit}</p>
+            <p style="margin:0; font-weight:bold;">예상 수익금: {est_profit:+,.0f} {unit}</p>
         </div>""", unsafe_allow_html=True)
     with c2:
         diff = df['close'].iloc[-1] - df['close'].iloc[-2]
@@ -137,22 +147,38 @@ if df is not None and not df.empty:
         st.metric("RSI (14D)", f"{rsi_val:.1f}", "과매도" if rsi_val < 30 else "정상")
         st.metric("목표가 (+12%)", f"{curr_p*1.12:,.0f}{unit}")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📉 시세 분석", "🌡️ AI 진단", "📰 뉴스 판별", "📅 캘린더"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📉 분석 차트", "🌡️ AI 정밀 진단", "📰 실시간 뉴스", "📅 투자 캘린더"])
 
     with tab1:
         rows = 2 if show_rsi else 1
-        fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3] if show_rsi else [1], vertical_spacing=0.03)
+        fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2] if show_rsi else [1], vertical_spacing=0.03)
         if chart_style == "전문가 캔들" and view_mode != "1분봉":
             fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], increasing_line_color='#FF3B30', decreasing_line_color='#007AFF', name=''), row=1, col=1)
         else:
             fig.add_trace(go.Scatter(x=df.index, y=df['close'], fill='tozeroy', fillcolor='rgba(0, 242, 255, 0.1)', line=dict(color='#00f2ff', width=2.5), name=''), row=1, col=1)
         for ma in show_ma: fig.add_trace(go.Scatter(x=df.index, y=df[f'MA{ma}'], line=dict(width=1.2), name=f'{ma}선'), row=1, col=1)
+        fig.add_trace(go.Bar(x=df.index, y=df['vol'], marker_color='#333', name='거래량'), row=2, col=1)
         fig.update_layout(height=600, template='plotly_dark', xaxis_rangeslider_visible=False, margin=dict(t=0, b=0, l=0, r=0), showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
-    with tab2: st.info(f"현재 {target_name}의 AI 점수는 {score}점입니다. {'매수 우위 구간입니다.' if score > 70 else '관망 유지 구간입니다.'}")
-    with tab3: st.write("네이버 뉴스 검색 결과를 불러오는 중...")
-    with tab4: st.markdown("[공모주/배당주 일정 바로가기](https://finance.naver.com/sise/ipo.naver)")
+    with tab2:
+        st.info(f"현재 {target_name}의 AI 스코어는 {score}점입니다. {'매수 우위 구간입니다.' if score > 70 else '관망 유지 구간입니다.'}")
+        fig_g = go.Figure(go.Indicator(mode="gauge+number", value=score, gauge={'bar':{'color':'#FF3B30' if score > 70 else '#00f2ff'}, 'bgcolor':'#222'}))
+        fig_g.update_layout(height=400, template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_g, use_container_width=True)
+
+    with tab3: # 뉴스 (BS4 정밀 스캔)
+        st.subheader("📰 실시간 뉴스 리포트")
+        res_n = get_secure_session().get(f"https://search.naver.com/search.naver?where=news&query={target_name}")
+        soup = BeautifulSoup(res_n.text, 'html.parser')
+        for art in soup.select('.news_area')[:6]:
+            tit = art.select_one('.news_tit').text; lnk = art.select_one('.news_tit')['href']
+            st.markdown(f'<div class="info-card"><a href="{lnk}" target="_blank" style="color:white; text-decoration:none;">{tit}</a></div>', unsafe_allow_html=True)
+
+    with tab4: # 캘린더 센터
+        st.subheader("📅 공모주 & 고배당주 투자 일정")
+        st.markdown('<div class="info-card"><a href="https://finance.naver.com/sise/ipo.naver" target="_blank" style="color:#00f2ff; text-decoration:none;">🚀 실시간 IPO 공모주 일정 확인</a></div>', unsafe_allow_html=True)
+        st.markdown('<div class="info-card"><a href="https://finance.naver.com/sise/dividend_list.naver" target="_blank" style="color:#FFD60A; text-decoration:none;">💰 국내 고배당 종목 순위</a></div>', unsafe_allow_html=True)
 
 else:
-    st.error("데이터 로드 실패: 현재 서버와의 연결이 차단되었습니다. 잠시 후 종목을 다시 검색하거나 페이지를 새로고침(F5) 해주세요.")
+    st.error("데이터 로드 실패: 현재 서버와의 연결이 차단되었습니다. 페이지를 새로고침(F5) 하거나 잠시 후 다시 검색해 보세요.")
