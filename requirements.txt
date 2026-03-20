@@ -1,8 +1,8 @@
-streamlit
+yfinance
 pandas
 numpy
-plotly
-finance-datareader
+mplfinance
+matplotlib
 scipy
-feedparser
-yfinance
+requests
+beautifulsoup4
