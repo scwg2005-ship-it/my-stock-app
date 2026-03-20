@@ -5,3 +5,4 @@ plotly
 finance-datareader
 scipy
 feedparser
+yfinance
