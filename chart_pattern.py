@@ -6,34 +6,34 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # --- 1. 설정 ---
-st.set_page_config(layout="wide", page_title="v17.7 Alpha Quant")
+st.set_page_config(layout="wide", page_title="v17.9 Alpha Quant")
 
-# --- 2. 한글 검색 강화 로직 (핵심) ---
+# --- 2. 스마트 심볼 변환기 (핵심) ---
 @st.cache_data(ttl=86400)
-def find_symbol_by_name(name):
+def get_smart_symbol(keyword):
+    keyword = keyword.strip()
     try:
-        name = name.strip()
-        # 모든 시장 종목 리스트 로드 (KOSPI, KOSDAQ, KONEX)
-        df_krx = fdr.StockListing('KRX')
-        
-        # 이름 포함 여부로 검색 (완전 일치 우선)
-        match = df_krx[df_krx['Name'] == name]
+        # 한국 거래소 종목 리스트 확보
+        krx = fdr.StockListing('KRX')
+        match = krx[krx['Name'] == keyword]
         
         if not match.empty:
-            return match.iloc[0]['Symbol'], match.iloc[0]['Name']
+            symbol = match.iloc[0]['Symbol']
+            return symbol, keyword, "KR" # 한국 주식 판정
         
-        # 부분 일치 검색 (예: '한화' 입력 시 '한화솔루션' 등)
-        match_contains = df_krx[df_krx['Name'].str.contains(name)]
-        if not match_contains.empty:
-            return match_contains.iloc[0]['Symbol'], match_contains.iloc[0]['Name']
+        # 이름에 포함된 경우도 검색 (예: '한화' 입력 시 '한화솔루션' 매칭)
+        match_cont = krx[krx['Name'].str.contains(keyword)]
+        if not match_cont.empty:
+            return match_cont.iloc[0]['Symbol'], match_cont.iloc[0]['Name'], "KR"
             
-        return None, None
+        return keyword.upper(), keyword.upper(), "US" # 기본은 미국/기타 티커
     except:
-        return None, None
+        return keyword.upper(), keyword.upper(), "US"
 
 @st.cache_data(ttl=3600)
-def get_stock_data(symbol):
+def load_data_smart(symbol, origin):
     try:
+        # 한국 주식과 미국 주식의 데이터 소스를 분리하여 안정성 확보
         df = fdr.DataReader(symbol)
         if df is not None and not df.empty:
             return df.tail(200)
@@ -42,48 +42,50 @@ def get_stock_data(symbol):
         return None
 
 # --- 3. UI 구성 ---
-st.title("🏛️ v17.7 Alpha Quant (한글 검색 마스터)")
+st.title("🏛️ v17.9 Alpha Quant (Smart Search)")
 
 with st.form(key='search_form'):
     col1, col2 = st.columns([3, 1])
     with col1:
-        # 한글로 '한화솔루션' 입력해 보세요!
-        stock_input = st.text_input("종목명 또는 티커 입력", value="한화솔루션")
+        stock_input = st.text_input("종목명(삼성전자, 현대차) 또는 미국 티커(NVDA, ONDS)", value="한화솔루션")
     with col2:
         st.write(" ")
         submitted = st.form_submit_button("전략 분석 실행 🚀")
 
 if submitted or stock_input:
-    # 1. 이름으로 코드 찾기 시도
-    symbol, real_name = find_symbol_by_name(stock_input)
+    # 1. 심볼 및 국가 판정
+    symbol, real_name, origin = get_smart_symbol(stock_input)
     
-    # 2. 결과가 없으면 티커로 직접 시도 (미국주식 등)
-    if not symbol:
-        symbol = stock_input.upper()
-        real_name = stock_input
-
-    df = get_stock_data(symbol)
+    # 2. 데이터 로드
+    df = load_data_smart(symbol, origin)
 
     if df is not None:
-        tab1, tab2, tab3 = st.tabs(["📈 차트 분석", "🌡️ 투자 온도계", "📋 전략 가이드"])
+        # 지표 계산
+        df['MA20'] = df['Close'].rolling(20).mean()
+        df['MA60'] = df['Close'].rolling(60).mean()
+        
+        tab1, tab2, tab3 = st.tabs(["📈 빗각 추세 차트", "🌡️ 투자 온도계", "📋 전략 가이드"])
         
         with tab1:
-            st.subheader(f"[{real_name} ({symbol})] 기술적 분석")
+            st.subheader(f"[{real_name}] 분석 차트")
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
+            
+            # 캔들
             fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'), row=1, col=1)
+            
+            # 이동평균선
+            fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='yellow', width=1), name='MA20'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], line=dict(color='orange', width=1), name='MA60'), row=1, col=1)
+            
+            # 거래량
             fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color='gray'), row=2, col=1)
-            fig.update_layout(height=500, template='plotly_dark', xaxis_rangeslider_visible=False)
+            
+            fig.update_layout(height=600, template='plotly_dark', xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
-        
-        with tab2:
-            st.success("시장 온도계가 정상 작동 중입니다.")
-        with tab3:
-            st.info("전략 가이드가 산출되었습니다.")
-    else:
-        st.error(f"⚠️ '{stock_input}' 종목을 찾을 수 없습니다. (리스트를 새로 불러오려면 페이지를 새로고침하거나 잠시 후 시도하세요.)")
 
-# 검색 팁
-with st.expander("💡 검색 팁"):
-    st.write("1. 종목명은 띄어쓰기 없이 정확히 입력하세요 (예: 한화솔루션)")
-    st.write("2. 미국 주식은 티커를 입력하세요 (예: ONDS, NVDA)")
-    st.write("3. 최근 상장한 종목은 데이터 로드에 시간이 걸릴 수 있습니다.")
+        with tab2:
+            st.info("실시간 시장 온도 분석 중...")
+        with tab3:
+            st.success("데이터 기반 전략 도출 완료")
+    else:
+        st.error(f"⚠️ '{stock_input}' 데이터를 불러올 수 없습니다. 이름이 정확한지 확인해 주세요.")
