@@ -3,3 +3,5 @@ pandas
 plotly
 requests
 beautifulsoup4
+html5lib
+lxml
