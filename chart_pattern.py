@@ -1,158 +1,169 @@
 import streamlit as st
 import pandas as pd
+import requests
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import yfinance as yf
-from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
+from io import StringIO
+import re
 
-# --- 1. [디자인] 고대비 테마 및 스타일 설정 ---
-st.set_page_config(layout="wide", page_title="Aegis Global v43.0")
+# --- 1. [디자인] 프리미엄 네온 크리스탈 스타일 ---
+st.set_page_config(layout="wide", page_title="Aegis Global v43.1")
 st.markdown("""
     <style>
-    .stApp { background-color: #0d1117; color: white; }
-    .stMetric { border: 1px solid #30363d; background-color: #161b22; color: white !important; padding: 10px; border-radius: 8px; }
-    .stRadio>div { background-color: #161b22; padding: 10px; border-radius: 8px; border: 1px solid #30363d;}
-    div[data-testid="stExpander"] { border: 1px solid #30363d; border-radius: 8px; background-color: #161b22;}
+    .stApp { background-color: #000000; }
+    .stMetric { border: 1.5px solid #00f2ff; background-color: #080808; color: #ffffff !important; padding: 18px; border-radius: 12px; box-shadow: 0 0 15px rgba(0,242,255,0.15); }
+    .main-title { font-size: 2.5rem; font-weight: 800; color: #ffdf00; text-align: center; margin-bottom: 30px; text-shadow: 0 0 12px rgba(255,223,0,0.6); }
+    .status-text { font-size: 1.8rem; font-weight: 800; text-align: center; padding: 15px; border-radius: 12px; margin: 10px 0; }
+    .news-card { background-color: #111; padding: 15px; border-radius: 10px; border-left: 5px solid #00f2ff; margin-bottom: 12px; }
+    .news-title { font-size: 1.15rem; font-weight: 600; color: #fff; text-decoration: none; display: block; margin-bottom: 5px; }
+    .news-title:hover { color: #00f2ff; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. [데이터] 글로벌 통합 데이터 로더 (미국 주식 최적화) ---
-@st.cache_data(ttl=60)
-def get_detailed_stock_data(symbol):
+# --- 2. [검색] 글로벌 2중 검색 엔진 (국내 KRX + 미국 실시간) ---
+@st.cache_data(ttl=86400)
+def get_krx_master():
     try:
-        # 야후 파이낸스 사용 (미국 주식 SLDP 등 최적화)
-        ticker = yf.Ticker(symbol)
-        # 1년치 일봉 데이터 가져오기
-        df = ticker.history(period="1y", interval="1d")
-        
-        if df.empty or len(df) < 120: return None
-        
-        df = df.sort_index()
-        # image_2.png에 있는 이동평균선 구성 (5, 20, 60, 120)
-        df['MA5'] = df['Close'].rolling(window=5).mean()
-        df['MA20'] = df['Close'].rolling(window=20).mean()
-        df['MA60'] = df['Close'].rolling(window=60).mean()
-        df['MA120'] = df['Close'].rolling(window=120).mean()
-        
-        # 보조지표 MACD 계산 (image_2.png 하단)
-        exp1 = df['Close'].ewm(span=12, adjust=False).mean()
-        exp2 = df['Close'].ewm(span=26, adjust=False).mean()
-        df['MACD'] = exp1 - exp2
-        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        df['Hist'] = df['MACD'] - df['Signal']
-        
-        # 최고/최저점 계산 (image_2.png 텍스트용)
-        df['Is_Max'] = df['High'] == df['High'].max()
-        df['Is_Min'] = df['Low'] == df['Low'].min()
-        
-        # 예시용 가상 매매 마킹 (Is_Buy/Is_Sell)
-        # 실제로는 사용자님의 매매 내역을 여기에 연동해야 합니다.
-        np.random.seed(42)
-        df['Is_Buy'] = np.random.choice([True, False], len(df), p=[0.02, 0.98])
-        df['Is_Sell'] = np.random.choice([True, False], len(df), p=[0.01, 0.99])
+        url = 'http://kind.krx.co.kr/corpoctl/corpList.do?method=download&searchType=13'
+        df = pd.read_html(url, header=0)[0]
+        df['종목코드'] = df['종목코드'].apply(lambda x: f"{x:06d}")
+        return dict(zip(df['종목명'], df['종목코드']))
+    except: return {"삼성전자": "005930", "우리금융지주": "316140"}
 
+def fetch_global_symbol(query):
+    krx = get_krx_master()
+    if query in krx: return krx[query], "KR"
+    # 미국 주식 티커 추출 (대문자 1-5자 혹은 네이버 검색 활용)
+    if query.isupper() and 1 <= len(query) <= 5: return query, "US"
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(f"https://search.naver.com/search.naver?query={query} 주가", headers=headers, timeout=5)
+        ticker_match = re.search(r'([A-Z]{1,5})\.O|([A-Z]{1,5})\.N', res.text)
+        if ticker_match:
+            ticker = ticker_match.group(1) if ticker_match.group(1) else ticker_match.group(2)
+            return ticker, "US"
+    except: pass
+    return query.upper(), "US"
+
+# --- 3. [데이터] 방탄 글로벌 로더 (yfinance 미사용 버전) ---
+@st.cache_data(ttl=60)
+def get_global_data(symbol, market="KR", mode="일봉"):
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        if market == "KR":
+            url = f"https://finance.naver.com/item/sise_day.naver?code={symbol}&page=1" if mode != "1분봉" else f"https://finance.naver.com/item/sise_time.naver?code={symbol}&page=1"
+            res = requests.get(url, headers=headers)
+            dfs = pd.read_html(StringIO(res.text), flavor='lxml')
+            df = next(t.dropna(subset=[t.columns[0]]) for t in dfs if '날짜' in t.columns or '시간' in t.columns)
+            df = df.iloc[:, :7]
+            df.columns = ['date', 'close', 'diff', 'open', 'high', 'low', 'vol']
+        else:
+            # 미국 주식 Yahoo JSON API 직접 호출 (별도 설치 필요 없음)
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1mo"
+            res = requests.get(url, headers=headers)
+            res_data = res.json()['chart']['result'][0]
+            df = pd.DataFrame({
+                'date': pd.to_datetime(res_data['timestamp'], unit='s'),
+                'close': res_data['indicators']['quote'][0]['close'],
+                'open': res_data['indicators']['quote'][0]['open'],
+                'high': res_data['indicators']['quote'][0]['high'],
+                'low': res_data['indicators']['quote'][0]['low'],
+                'vol': res_data['indicators']['quote'][0]['volume']
+            })
+        
+        df = df.set_index('date').sort_index().ffill().dropna()
+        for c in ['close', 'open', 'high', 'low', 'vol']: df[c] = pd.to_numeric(df[c])
+        df['MA5'] = df['close'].rolling(window=5).mean()
+        df['MA20'] = df['close'].rolling(window=20).mean()
+        df['GC'] = (df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1))
         return df
     except: return None
 
-# --- 3. [시각화] image_2.png 스타일 통합 차트 ---
-def draw_detailed_global_chart(df, symbol):
-    # 메인 차트와 MACD 보조 지표를 나눔 (shared_xaxes)
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                        row_heights=[0.8, 0.2], vertical_spacing=0.03,
-                        subplot_titles=(f"{symbol} Detailed Chart", "MACD"))
+# --- 4. [뉴스] 실시간 뉴스 및 URL 링크 ---
+@st.cache_data(ttl=300)
+def get_realtime_news(query):
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    news_list = []
+    try:
+        res = requests.get(f"https://search.naver.com/search.naver?where=news&query={query}+주가", headers=headers)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        for art in soup.select('.news_area')[:6]:
+            news_list.append({
+                "title": art.select_one('.news_tit').text,
+                "link": art.select_one('.news_tit')['href'],
+                "press": art.select_one('.info_group').text.split(' ')[0]
+            })
+    except: pass
+    return news_list
 
-    # (1) 메인 캔들 차트 (image_2.png 색상 반영)
-    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-                                 increasing_line_color='#00c087', decreasing_line_color='#ff3b30', name='시세'), row=1, col=1)
-    
-    # (2) 이동평균선 레이어 (image_2.png 스타일)
-    ma_colors = {'MA5': '#8cfcb2', 'MA20': '#ff4d4d', 'MA60': '#ffb3ba', 'MA120': '#b388ff'}
-    for ma, color in ma_colors.items():
-        if ma in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df[ma], line=dict(color=color, width=1.5), name=ma), row=1, col=1)
+# --- 5. 메인 UI 및 컨트롤 ---
+st.markdown('<p class="main-title">Aegis Global Master v43.1</p>', unsafe_allow_html=True)
 
-    # (3) [image_2.png 핵심] 최고/최저점 텍스트 마킹
-    max_row = df[df['Is_Max']].iloc[0]
-    fig.add_annotation(x=max_row.name, y=max_row['High'], text=f"{max_row['High']:.2f}<br>(최고)", showarrow=True, arrowhead=1, arrowcolor="red", font=dict(color="red", size=11), yshift=10, row=1, col=1)
-    
-    min_row = df[df['Is_Min']].iloc[0]
-    fig.add_annotation(x=min_row.name, y=min_row['Low'], text=f"{min_row['Low']:.2f}<br>(최저)", showarrow=True, arrowhead=1, arrowcolor="dodgerblue", font=dict(color="dodgerblue", size=11), yshift=-10, row=1, col=1)
-
-    # (4) [image_2.png 핵심] 매수(B)/매도(S) 가상 마킹
-    buy_rows = df[df['Is_Buy']]
-    if not buy_rows.empty:
-        fig.add_trace(go.Scatter(x=buy_rows.index, y=buy_rows['Low']*0.98, mode='markers+text', text='B', textposition='bottom center', textfont=dict(color="lime", size=10), marker=dict(symbol='triangle-up', size=8, color='lime'), name='매수'), row=1, col=1)
-        
-    sell_rows = df[df['Is_Sell']]
-    if not sell_rows.empty:
-        fig.add_trace(go.Scatter(x=sell_rows.index, y=sell_rows['High']*1.02, mode='markers+text', text='S', textposition='top center', textfont=dict(color="red", size=10), marker=dict(symbol='triangle-down', size=8, color='red'), name='매도'), row=1, col=1)
-
-    # (5) [image_2.png 하단] MACD 보조 지표
-    fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='#ff9f43', width=1.5), name='MACD'), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['Signal'], line=dict(color='#00cfe8', width=1.5), name='Signal'), row=2, col=1)
-    
-    # MACD 히스토그램 (색상 분리)
-    colors_h = ['#ff3b30' if val < 0 else '#00c087' for val in df['Hist']]
-    fig.add_trace(go.Bar(x=df.index, y=df['Hist'], marker_color=colors_h, name='Histogram'), row=2, col=1)
-
-    # (6) 레이아웃 설정 (모바일 고정 및 시인성 최적화)
-    fig.update_xaxes(fixedrange=True, rangeslider_visible=False, color='#888', gridcolor='#222')
-    fig.update_yaxes(fixedrange=True, color='#888', gridcolor='#222')
-    fig.update_layout(
-        height=700, 
-        template='plotly_dark', 
-        xaxis_rangeslider_visible=False, 
-        dragmode=False, 
-        paper_bgcolor='rgba(0,0,0,0)', 
-        plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(l=10, r=10, t=50, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    
-    return fig
-
-# --- 4. 메인 대시보드 UI 및 제어 ---
-st.markdown('<p style="font-size: 2.2rem; font-weight: 800; color: #ffdf00; text-align: center;">Aegis Global v43.0 "Global Detailed Chart"</p>', unsafe_allow_html=True)
-
+all_stocks = get_krx_master()
 with st.sidebar:
-    st.subheader("🔍 종목 검색")
-    u_input = st.text_input("종목명 입력 (예: 솔리드파워, TSLA, 삼성전자)", value="SLDP")
-    # 대문자로 변환 (야후 파이낸스 티커용)
-    target_symbol = u_input.upper().strip()
+    st.subheader("🔍 실시간 글로벌 필터링")
+    u_input = st.text_input("종목명/티커 입력 (예: 솔리드파워, 삼성, TSLA)", value="SLDP")
     
+    # 실시간 필터링 (국내주식 리스트 기반)
+    filtered = [n for n in all_stocks.keys() if u_input in n]
+    if filtered:
+        target_name = st.selectbox(f"검색 결과 ({len(filtered)}건)", options=filtered[:50])
+    else: target_name = u_input
+    
+    symbol, market = fetch_global_symbol(target_name)
+    view_mode = st.radio("주기", ["일봉", "월봉"], index=0)
     st.divider()
-    st.caption(f"분석 중인 티커: {target_symbol}")
-    st.caption("v43.0: Detailed Chart & MACD")
+    st.info(f"분석 대상: {target_name} ({symbol}) | 시장: {market}")
 
-# 데이터 로드
-df = get_detailed_stock_data(target_symbol)
+df = get_global_data(symbol, market, view_mode)
 
 if df is not None:
-    # `image_2.png`와 유사하게 $ 단위로 매매 가이드라인 제공
-    curr_p = df['Close'].iloc[-1]
-    
-    tab1, tab2 = st.tabs(["📈 Detailed Chart", "🌡️ AI 정밀 온도계"])
+    curr_p = df['close'].iloc[-1]
+    unit = "$" if market == "US" else "원"
+    tab1, tab2, tab3 = st.tabs(["📈 [1P] 통합 차트", "🌡️ [2P] AI 정밀 온도계", "📰 [3P] 실시간 뉴스"])
 
-    # --- tab1: 상세 차트 분석 (image_2.png 스타일) ---
+    # 1P: 통합 차트 분석
     with tab1:
-        # 매매가 가이드 ($ 단위)
         c1, c2, c3 = st.columns(3)
-        c1.metric("🔥 AI 권장 매수", f"${curr_p * 0.99:,.2f}")
-        c2.metric("🚀 목표 익절 (+12%)", f"${curr_p * 1.12:,.2f}")
-        c3.metric("⚠️ 위험 손절 (-6%)", f"{curr_p * 0.94:,.2f}")
+        c1.metric("🔥 AI 권장 매수", f"{unit}{curr_p * 0.99:,.2f}")
+        c2.metric("🚀 목표 익절 (+12%)", f"{unit}{curr_p * 1.12:,.2f}")
+        c3.metric("⚠️ 위험 손절 (-6%)", f"{unit}{curr_p * 0.94:,.2f}")
         
-        # 상세 차트 그리기
-        st.plotly_chart(draw_detailed_global_chart(df, target_symbol), use_container_width=True, config={'displayModeBar': False})
-        
-    # --- tab2: AI 정밀 온도계 (이전과 동일) ---
-    with tab2:
-        score = 50 + (25 if df['MA5'].iloc[-1] > df['MA120'].iloc[-1] else 0) + (25 if curr_p > df['MA20'].iloc[-1] else 0)
-        status = "🚀 강력 매수" if score >= 85 else "✅ 매수" if score >= 65 else "⚖️ 관망"
-        st.markdown(f'<p style="font-size: 1.8rem; font-weight: 700; text-align: center; color:#00ff41;">{target_name}: {status}</p>', unsafe_allow_html=True)
-        fig_g = go.Figure(go.Indicator(mode="gauge+number", value=score, gauge={'bar':{'color':"#00ff41"}}))
-        fig_g.update_layout(height=350, template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig_g, use_container_width=True, config={'displayModeBar': False})
+        fig = make_subplots(rows=1, cols=1)
+        fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+                                     increasing_line_color='#00ff41', decreasing_line_color='#ff0055', name='시세'))
+        fig.update_layout(height=600, template='plotly_dark', xaxis_rangeslider_visible=False, dragmode=False)
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
-else:
-    st.error("종목을 찾을 수 없거나 데이터 로드 실패입니다. 티커(예: SLDP)를 직접 입력해 보세요.")
+    # 2P: 풍부한 AI 온도계 (오른쪽 치우침)
+    with tab2:
+        is_gc = df['GC'].tail(15).any()
+        score = 45 + (30 if is_gc else 0) + (25 if curr_p > df['MA20'].iloc[-1] else 0)
+        status, s_color = ("🚀 강력 매수", "#00ff41") if score >= 80 else ("⚖️ 관망 유지", "#ffdf00")
+        
+        col_info, col_gauge = st.columns([1, 1.2])
+        with col_info:
+            st.markdown(f'<div class="status-text" style="color:{s_color}; border:2px solid {s_color};">{status}</div>', unsafe_allow_html=True)
+            st.write(f"### 🔍 {target_name} AI 리포트")
+            st.write(f"현재 종합 에너지 점수는 **{score}점**입니다.")
+            st.divider()
+            st.checkbox("골든크로스 신호 감지", value=is_gc, disabled=True)
+            st.checkbox("이평선 정배열 추세", value=curr_p > df['MA20'].iloc[-1], disabled=True)
+        with col_gauge:
+            fig_g = go.Figure(go.Indicator(mode="gauge+number", value=score, domain={'x': [0, 1], 'y': [0, 1]},
+                gauge={'bar': {'color': s_color}, 'bgcolor': "rgba(0,0,0,0)", 'axis': {'range': [0, 100]}}))
+            fig_g.update_layout(height=450, template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', margin=dict(r=50))
+            st.plotly_chart(fig_g, use_container_width=True)
+
+    # 3P: 실시간 뉴스 URL 링크
+    with tab3:
+        st.subheader(f"📰 {target_name} 주요 뉴스 (클릭 시 이동)")
+        news_data = get_realtime_news(target_name)
+        if news_data:
+            for n in news_data:
+                st.markdown(f'<div class="news-card"><a class="news-title" href="{n["link"]}" target="_blank">{n["title"]}</a><span style="color: #888;">{n["press"]} | 실시간</span></div>', unsafe_allow_html=True)
+        else: st.write("뉴스를 불러올 수 없습니다.")
+
+else: st.error("종목을 찾을 수 없습니다. 정확한 티커(예: SLDP, TSLA)를 입력해 주세요.")
