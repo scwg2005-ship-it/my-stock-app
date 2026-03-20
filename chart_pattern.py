@@ -79,47 +79,100 @@ class AlphaQuantSystem:
         df['Sell_Marker'] = np.where(df['Position'] == -1, df['High'] * 1.02, np.nan)
         
         self.data = df
-
 def render_professional_chart(self):
-        """[1단계 - 모듈 1] 전문가용 고해상도 캔들 차트 (Streamlit + NaN 방어 로직 적용)"""
-        import streamlit as st  # Streamlit 라이브러리 추가
+        """[1단계 - 모듈 1] Streamlit 최적화 및 AttributeError 방어 차트 렌더링"""
+        import streamlit as st
+        import matplotlib.pyplot as plt
+
+        # 1. 데이터 존재 여부 체크 (AttributeError 방지 핵심)
+        if self.data.empty:
+            st.error("❌ 분석할 데이터가 없습니다. 티커를 확인해 주세요.")
+            return
+
+        # 2. 필요한 컬럼이 없는 경우를 대비한 자동 생성 (안전장치)
+        required_cols = ['MA_5', 'MA_20', 'MACD', 'Signal_Line', 'MACD_Histogram', 'Buy_Marker', 'Sell_Marker']
+        for col in required_cols:
+            if col not in self.data.columns:
+                self.data[col] = np.nan
+
+        # 3. 최근 120일 데이터 슬라이싱
+        df_plot = self.data[-120:].copy()
         
-        print(">> 고해상도 퀀트 시각화 차트 렌더링 중...")
-        # 경고 방지를 위해 .copy() 사용
-        df = self.data[-120:].copy() 
-        
-        # 한국식 캔들 색상 설정
-        mc = mpf.make_marketcolors(up='red', down='blue',
-                                   edge='inherit', wick='inherit',
-                                   volume={'up': 'red', 'down': 'blue'})
+        # 4. 차트 스타일 설정
+        mc = mpf.make_marketcolors(up='red', down='blue', edge='inherit', wick='inherit', volume={'up': 'red', 'down': 'blue'})
         s = mpf.make_mpf_style(marketcolors=mc, gridstyle=':', y_on_right=False)
-        
-        # 기본 보조 지표 추가 (이평선, MACD)
+
+        # 5. 보조 지표 패널 구성
         apds = [
-            mpf.make_addplot(df['MA_5'], color='magenta', width=1.5, panel=0),
-            mpf.make_addplot(df['MA_20'], color='cyan', width=1.5, panel=0),
-            mpf.make_addplot(df['MACD'], color='black', panel=2, ylabel='MACD'),
-            mpf.make_addplot(df['Signal_Line'], color='red', panel=2),
-            mpf.make_addplot(df['MACD_Histogram'], type='bar', color='dimgray', panel=2)
+            mpf.make_addplot(df_plot['MA_5'], color='magenta', width=1.2, panel=0),
+            mpf.make_addplot(df_plot['MA_20'], color='cyan', width=1.2, panel=0),
+            mpf.make_addplot(df_plot['MACD'], color='black', panel=2, ylabel='MACD'),
+            mpf.make_addplot(df_plot['Signal_Line'], color='red', panel=2),
+            mpf.make_addplot(df_plot['MACD_Histogram'], type='bar', color='dimgray', panel=2)
         ]
+
+        # 6. 매매 타점 마커 추가 (값이 있을 때만)
+        if not df_plot['Buy_Marker'].dropna().empty:
+            apds.append(mpf.make_addplot(df_plot['Buy_Marker'], type='scatter', markersize=80, marker='^', color='red', panel=0))
+        if not df_plot['Sell_Marker'].dropna().empty:
+            apds.append(mpf.make_addplot(df_plot['Sell_Marker'], type='scatter', markersize=80, marker='v', color='blue', panel=0))
+
+        # 7. 차트 생성 및 Streamlit 출력
+        try:
+            fig, axlist = mpf.plot(df_plot, type='candle', volume=True, addplot=apds, style=s,
+                                  title=f"\n[v15.0 Alpha Quant] {self.ticker} Analysis",
+                                  ylabel='Price', ylabel_lower='Volume',
+                                  figratio=(14, 9), figscale=1.1, panel_ratios=(4, 1, 1.5),
+                                  returnfig=True)
+            st.pyplot(fig)
+            plt.close(fig) # 메모리 관리
+        except Exception as e:
+            st.warning(f"⚠️ 차트 생성 중 일부 오류 발생: {e}")
+
+# ==========================================
+# 메인 실행부 (Streamlit UI 구성)
+# ==========================================
+if __name__ == "__main__":
+    import streamlit as st
+    
+    # 🎨 웹 대시보드 제목
+    st.set_page_config(page_title="v15.0 Alpha Quant Engine", layout="wide")
+    st.title("🏛️ v15.0 Alpha Quant System Dashboard")
+    
+    # 사이드바 설정
+    target_ticker = st.sidebar.text_input("Enter Ticker (e.g. ONDS, TSLA, ^NDX)", value="ONDS")
+    lookback = st.sidebar.slider("Lookback Period (Days)", 100, 500, 250)
+    
+    if st.sidebar.button("🚀 Run Analysis"):
+        engine = AlphaQuantSystem(ticker=target_ticker, days_back=lookback)
         
-        # 🚨 [버그 픽스] 마커 데이터가 전부 NaN이 아닐 때만(즉, 매매 타점이 있을 때만) 플롯에 추가
-        if not df['Buy_Marker'].isna().all():
-            apds.append(mpf.make_addplot(df['Buy_Marker'], type='scatter', markersize=100, marker='^', color='red', panel=0))
+        with st.spinner('데이터 분석 및 엔진 가동 중...'):
+            # 파이프라인 순차 가동
+            engine.fetch_market_data()
+            engine.calc_technical_indicators()
+            engine.calc_fibonacci_retracement()
+            engine.analyze_elliott_waves()
+            engine.fetch_live_news_sentiment()
+            engine.calc_quant_thermometer()
+            engine.calc_volume_profile()
+            engine.calc_kelly_criterion()
             
-        if not df['Sell_Marker'].isna().all():
-            apds.append(mpf.make_addplot(df['Sell_Marker'], type='scatter', markersize=100, marker='v', color='blue', panel=0))
-        
-        # 🌐 [Streamlit 호환 픽스] returnfig=True를 넣어야 Streamlit에서 피규어 객체를 받을 수 있음
-        fig, axes = mpf.plot(df, type='candle', volume=True, addplot=apds, style=s,
-                 title=f"\n[v15.0 Alpha Quant] {self.ticker} Technical Analysis",
-                 ylabel='Price', ylabel_lower='Volume',
-                 figratio=(14, 8), figscale=1.2, panel_ratios=(4, 1, 1.5),
-                 returnfig=True)
-                 
-        # Streamlit 화면에 차트 렌더링
-        st.pyplot(fig)
-        print(">> 차트 렌더링 완료.")
+            # 1. 차트 렌더링
+            engine.render_professional_chart()
+            
+            # 2. 리포트 섹션 (Streamlit UI로 깔끔하게 출력)
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Market Temp 🌡️", f"{engine.market_temperature:.1f}°C")
+                st.write(f"**Wave Status:** {engine.wave_status}")
+            with col2:
+                st.metric("Sentiment Score 🧠", f"{engine.sentiment_score:.1f}/100")
+                st.write(f"**POC Price:** {engine.poc_price:.2f}")
+            with col3:
+                st.metric("Kelly Betting ⚖️", f"{engine.safe_kelly_pct:.2f}%")
+                st.write("**Strategy:** V15.0 Alpha Integrated")
+                
+            st.success("✅ 모든 14개 모듈 분석이 완료되었습니다.")
 
 # 파트 1 단독 테스트용 코드
 if __name__ == "__main__":
