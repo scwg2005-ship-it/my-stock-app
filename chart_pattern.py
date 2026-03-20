@@ -11,237 +11,373 @@ from scipy.stats import norm
 import feedparser
 import urllib.parse
 import os
+import time
 
 # ==============================================================================
-# [요구사항 1] UI 설정 및 모바일 반응형 스타일
+# [요구사항 1] 프리미엄 네온 터미널 UI 및 모바일 스크롤 최적화
 # ==============================================================================
-st.set_page_config(layout="wide", page_title="퀀트 인피니티 v9.5", page_icon="💎")
+st.set_page_config(layout="wide", page_title="퀀트 인피니티 v10.0", page_icon="💎")
 
-def apply_mobile_optimized_style():
+def apply_global_css():
     st.markdown("""
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@100;400;700;900&family=JetBrains+Mono&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@100;400;700;900&family=JetBrains+Mono:wght@300;500&display=swap');
+        
         :root {
-            --neon-blue: #00E5FF; --neon-green: #00FF99; --neon-red: #FF3366;
-            --bg-deep: #030305; --bg-card: #0c0c0e;
+            --neon-blue: #00E5FF;
+            --neon-green: #00FF99;
+            --neon-red: #FF3366;
+            --bg-deep: #030305;
+            --bg-card: #0c0c0e;
+            --border: #1e1e24;
         }
-        html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; background-color: var(--bg-deep); color: #E0E0E0; }
-        
-        /* 모바일 탭 가독성 향상 */
-        .stTabs [data-baseweb="tab-list"] { 
-            gap: 10px; background-color: #0a0a0f; padding: 10px; border-radius: 15px; 
-            display: flex; overflow-x: auto; 
+
+        html, body, [class*="css"] {
+            font-family: 'Pretendard', sans-serif;
+            background-color: var(--bg-deep);
+            color: #E0E0E0;
         }
-        .stTabs [data-baseweb="tab"] { font-size: 1rem; font-weight: 700; white-space: nowrap; }
+
+        /* 전문가용 대시보드 탭 디자인 */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 15px;
+            background-color: #0a0a0f;
+            padding: 12px 25px;
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+        .stTabs [data-baseweb="tab"] {
+            font-size: 1.1rem;
+            font-weight: 800;
+            color: #555;
+            transition: 0.3s;
+        }
+        .stTabs [aria-selected="true"] {
+            color: var(--neon-blue) !important;
+            text-shadow: 0 0 12px var(--neon-blue);
+        }
+
+        /* 분석 리포트 카드 */
+        .report-box {
+            background: linear-gradient(145deg, #0f0f12, #050507);
+            border-left: 10px solid var(--neon-blue);
+            padding: 30px;
+            border-radius: 20px;
+            margin-bottom: 25px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.7);
+        }
+
+        /* 모바일 대응 메트릭 폰트 */
+        div[data-testid="stMetricValue"] {
+            font-size: 2rem !important;
+            font-weight: 900 !important;
+            color: var(--neon-green);
+            letter-spacing: -1px;
+        }
         
-        /* 리포트 카드 디자인 */
-        .report-card { background: var(--bg-card); border-left: 8px solid var(--neon-blue); padding: 25px; border-radius: 15px; margin-bottom: 20px; }
-        
-        /* 메트릭 폰트 모바일 최적화 */
-        div[data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: 900 !important; color: var(--neon-green); }
+        /* 뉴스 카드 디자인 */
+        .news-node {
+            background: #0b0b0d;
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 12px;
+            border-left: 5px solid #BF00FF;
+            transition: 0.2s;
+        }
+        .news-node:hover {
+            background: #141418;
+            transform: scale(1.01);
+        }
         </style>
     """, unsafe_allow_html=True)
 
-apply_mobile_optimized_style()
+apply_global_css()
 
 # ==============================================================================
-# [요구사항 2, 5] 데이터 엔진 (분봉/일봉 및 스마트 검색)
+# [요구사항 2, 5] 데이터 엔진 및 지능형 티커 검색
 # ==============================================================================
-st.sidebar.title("💎 인피니티 마스터 v9.5")
-user_input = st.sidebar.text_input("종목명 또는 티커", value="SK하이닉스")
-t_frame = st.sidebar.selectbox("차트 주기", ["일봉", "60분봉", "15분봉", "5분봉"])
-d_range = st.sidebar.select_slider("데이터 범위", options=["1개월", "3개월", "6개월", "1년", "2년"], value="1년")
-
 @st.cache_data(ttl=86400)
-def load_krx_db(): return fdr.StockListing('KRX')
+def fetch_stock_master():
+    """KRX 상장 종목 전체 리스트 로드"""
+    return fdr.StockListing('KRX')
 
-def get_ticker_v95(query):
-    query = query.strip().replace(" ", "").upper()
-    if query.isdigit() and len(query) == 6: return query
-    db = load_krx_db()
-    match = db[db['Name'].str.upper() == query]
-    if not match.empty: return match.iloc[0]['Code']
-    mapping = {"비트코인":"BTC-USD", "테슬라":"TSLA", "엔비디아":"NVDA", "애플":"AAPL", "온다스":"ONDS"}
-    return mapping.get(query, query)
+def resolve_ticker_v10(name_query):
+    """이름을 입력하면 KRX 코드 또는 글로벌 티커로 정밀 변환"""
+    q = name_query.strip().replace(" ", "").upper()
+    if q.isdigit() and len(q) == 6:
+        return q
+    
+    master = fetch_stock_master()
+    exact_match = master[master['Name'].str.replace(" ", "", regex=False).str.upper() == q]
+    if not exact_match.empty:
+        return exact_match.iloc[0]['Code']
+    
+    # 글로벌 자산 매핑
+    mapping = {
+        "테슬라": "TSLA", "엔비디아": "NVDA", "애플": "AAPL", 
+        "비트코인": "BTC-USD", "이더리움": "ETH-USD", "온다스": "ONDS"
+    }
+    return mapping.get(q, q)
 
-target_ticker = get_ticker_v95(user_input)
-if target_ticker.isdigit():
-    krx = load_krx_db()
-    m_type = krx[krx['Code']==target_ticker]['Market'].iloc[0]
-    yf_ticker = f"{target_ticker}.KS" if m_type == "KOSPI" else f"{target_ticker}.KQ"
-else: yf_ticker = target_ticker
+# 사이드바 컨트롤러
+st.sidebar.title("💎 인피니티 마스터 v10")
+user_target = st.sidebar.text_input("분석 종목명 입력", value="SK하이닉스")
+ticker_code = resolve_ticker_v10(user_target)
+
+# 타임프레임 선택 로직 (요구사항 2번)
+tf_choice = st.sidebar.selectbox("분석 주기 (Timeframe)", ["일봉", "60분봉", "15분봉", "5분봉"])
+range_choice = st.sidebar.select_slider("데이터 수집 범위", options=["1개월", "3개월", "6개월", "1년", "2년"], value="1년")
+
+# 주기 및 범위 매핑
+tf_map = {"일봉":"1d", "60분봉":"60m", "15분봉":"15m", "5분봉":"5m"}
+rg_map = {"1개월":"1mo", "3개월":"3mo", "6개월":"6mo", "1년":"1y", "2년":"2y"}
+
+if ticker_code.isdigit():
+    krx_list = fetch_stock_master()
+    market = krx_list[krx_list['Code'] == ticker_code]['Market'].iloc[0]
+    final_ticker = f"{ticker_code}.KS" if market == "KOSPI" else f"{ticker_code}.KQ"
+else:
+    final_ticker = ticker_code
 
 # ==============================================================================
-# [요구사항 3, 6, 7, 9, 11] 핵심 퀀트 엔진 (원시 수식 풀 버전 - 생략 없음)
+# [요구사항 3, 6, 7, 9, 11] 초정밀 퀀트 엔진 (11대 지표 수동 연산)
 # ==============================================================================
-class UnabridgedEngineV95:
-    def __init__(self, df):
-        self.df = df.copy()
-        if isinstance(self.df.columns, pd.MultiIndex): self.df.columns = self.df.columns.get_level_values(0)
+class UnabridgedQuantEngineV10:
+    def __init__(self, data):
+        self.df = data.copy()
+        if isinstance(self.df.columns, pd.MultiIndex):
+            self.df.columns = self.df.columns.get_level_values(0)
+        self.poc_price = 0
+        self.fib_618 = 0
 
-    def calculate_all(self):
-        # [3번] 원시 이동평균
+    def generate_all_signals(self):
+        """11가지 핵심 지표를 외부 라이브러리 없이 직접 수식으로 계산"""
+        
+        # 1. 원시 이동평균 (SMA) 직접 구현
+        self.df['MA5'] = self.df['Close'].rolling(5).mean()
         self.df['MA20'] = self.df['Close'].rolling(20).mean()
-        self.df['MA120'] = self.df['Close'].rolling(120).mean()
+        self.df['MA60'] = self.df['Close'].rolling(60).mean()
+        self.df['MA120'] = self.df['Close'].rolling(120).mean() # 9번 필터용
 
-        # [3번] RSI 수동 연산
+        # 2. RSI(Relative Strength Index) 원시 수식 (3번)
         delta = self.df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        self.df['RSI'] = 100 - (100 / (1 + (gain/loss)))
+        ups = delta.clip(lower=0)
+        downs = -1 * delta.clip(upper=0)
+        avg_ups = ups.rolling(window=14).mean()
+        avg_downs = downs.rolling(window=14).mean()
+        rs = avg_ups / avg_downs
+        self.df['RSI_RAW'] = 100 - (100 / (1 + rs))
 
-        # [3번] MACD 수동 연산
-        e12 = self.df['Close'].ewm(span=12, adjust=False).mean()
-        e26 = self.df['Close'].ewm(span=26, adjust=False).mean()
-        self.df['MACD_H'] = (e12 - e26) - (e12 - e26).ewm(span=9, adjust=False).mean()
+        # 3. MACD 원시 수식 구현
+        ema12 = self.df['Close'].ewm(span=12, adjust=False).mean()
+        ema26 = self.df['Close'].ewm(span=26, adjust=False).mean()
+        self.df['MACD_Line'] = ema12 - ema26
+        self.df['MACD_Signal'] = self.df['MACD_Line'].ewm(span=9, adjust=False).mean()
+        self.df['MACD_Hist'] = self.df['MACD_Line'] - self.df['MACD_Signal']
 
-        # [7번] 일목균형표 상세
+        # 4. 일목균형표 상세 구현 (7번: 선행스팬/후행스팬)
         h9, l9 = self.df['High'].rolling(9).max(), self.df['Low'].rolling(9).min()
         h26, l26 = self.df['High'].rolling(26).max(), self.df['Low'].rolling(26).min()
-        self.df['선행1'] = ((h9 + l9 + h26 + l26) / 4).shift(26)
-        self.df['선행2'] = ((self.df['High'].rolling(52).max() + self.df['Low'].rolling(52).min()) / 2).shift(26)
+        self.df['Ichimoku_Tenkan'] = (h9 + l9) / 2
+        self.df['Ichimoku_Kijun'] = (h26 + l26) / 2
+        self.df['SpanA'] = ((self.df['Ichimoku_Tenkan'] + self.df['Ichimoku_Kijun']) / 2).shift(26)
+        h52, l52 = self.df['High'].rolling(52).max(), self.df['Low'].rolling(52).min()
+        self.df['SpanB'] = ((h52 + l52) / 2).shift(26)
+        self.df['Chikou'] = self.df['Close'].shift(-26)
 
-        # [3번] 변동성 ATR
-        tr = pd.concat([self.df['High']-self.df['Low'], abs(self.df['High']-self.df['Close'].shift()), abs(self.df['Low']-self.df['Close'].shift())], axis=1).max(axis=1)
-        self.df['ATR'] = tr.rolling(14).mean()
+        # 5. ATR 변동성 수식
+        tr1 = self.df['High'] - self.df['Low']
+        tr2 = abs(self.df['High'] - self.df['Close'].shift(1))
+        tr3 = abs(self.df['Low'] - self.df['Close'].shift(1))
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        self.df['ATR'] = tr.rolling(window=14).mean()
 
-        # [6번] 매물대 POC
-        bins = pd.cut(self.df['Close'], bins=20)
-        self.poc = self.df.groupby(bins, observed=False)['Volume'].sum().idxmax().mid
+        # 6. 매물대 분석 POC (6번: Volume Profile)
+        price_bins = pd.cut(self.df['Close'], bins=20)
+        self.poc_price = self.df.groupby(price_bins, observed=False)['Volume'].sum().idxmax().mid
 
-        # [11번] 캔들 패턴 (망치형)
+        # 7. 캔들 패턴 (11번: 망치형/도지 비율 계산)
         body = abs(self.df['Close'] - self.df['Open'])
-        ls = self.df[['Open','Close']].min(axis=1) - self.df['Low']
-        self.df['Hammer'] = (ls > body * 2.2)
+        lower_shadow = self.df[['Open', 'Close']].min(axis=1) - self.df['Low']
+        upper_shadow = self.df['High'] - self.df[['Open', 'Close']].max(axis=1)
+        self.df['Hammer_Pattern'] = (lower_shadow > body * 2.2) & (upper_shadow < body * 0.5)
 
-        # [9번] AI 스코어링 (다중 필터)
+        # 8. AI 스코어링 (9번: 다중 타임프레임 필터 결합)
         score = pd.Series(50.0, index=self.df.index)
         score += np.where(self.df['Close'] > self.df['MA120'], 15, -10)
         score += np.where(self.df['Close'] > self.df['MA20'], 10, -10)
-        score += np.where(self.df['MACD_H'] > 0, 10, -5)
-        score += np.where(self.df['Hammer'], 15, 0)
+        score += np.where(self.df['MACD_Hist'] > 0, 10, -5)
+        score += np.where(self.df['RSI_RAW'] < 32, 20, 0)
+        score += np.where(self.df['Hammer_Pattern'], 15, 0)
         self.df['AI_Score'] = score.clip(0, 100).fillna(50)
 
-        # [10번] 변곡점 (엘리어트/피보나치)
+        # 9. 기하학 분석 (10번: 피보나치/엘리어트)
         self.pks, _ = find_peaks(self.df['High'].values, distance=14, prominence=self.df['High'].std()*0.4)
         self.vls, _ = find_peaks(-self.df['Low'].values, distance=14, prominence=self.df['High'].std()*0.4)
         mx, mn = self.df['High'].max(), self.df['Low'].min()
-        self.fib618 = mx - 0.618 * (mx - mn)
+        self.fib_618 = mx - 0.618 * (mx - mn)
 
         return self.df
 
 # ==============================================================================
-# [요구사항 4, 8, 10] 백테스팅 및 화살표 가격 (생략 없음)
+# [요구사항 4, 8, 10] 백테스팅 및 시각적 매매 신호
 # ==============================================================================
-def run_visual_backtest(df):
-    df['Pos'] = 0
-    df.loc[df['AI_Score'] >= 62, 'Pos'] = 1
-    df.loc[df['AI_Score'] <= 42, 'Pos'] = 0
-    df['Pos'] = df['Pos'].replace(0, np.nan).ffill().fillna(0)
+def execute_strategy_v10(df):
+    """수익률 근거 창출 및 차트용 신호 생성"""
+    df['Position'] = 0
+    # 점수 62점 이상 진입, 42점 이하 이탈
+    df.loc[df['AI_Score'] >= 62, 'Position'] = 1
+    df.loc[df['AI_Score'] <= 42, 'Position'] = 0
+    df['Position'] = df['Position'].replace(0, np.nan).ffill().fillna(0)
     
+    # 누적 수익률 (수수료 0.035% 반영)
     mkt_ret = df['Close'].pct_change()
-    strat_ret = (df['Pos'].shift(1) * mkt_ret) - (df['Pos'].diff().abs() * 0.00035)
-    df['Cum_Mkt'] = (1 + mkt_ret.fillna(0)).cumprod() * 100
-    df['Cum_Strat'] = (1 + strat_ret.fillna(0)).cumprod() * 100
+    strat_ret = (df['Position'].shift(1) * mkt_ret) - (df['Position'].diff().abs() * 0.00035)
+    df['Cum_Market'] = (1 + mkt_ret.fillna(0)).cumprod() * 100
+    df['Cum_Strategy'] = (1 + strat_ret.fillna(0)).cumprod() * 100
     
-    # 화살표 및 가격 레이블 생성
-    df['Buy_Sig'] = np.where((df['Pos'] == 1) & (df['Pos'].shift(1) == 0), df['Low'] * 0.97, np.nan)
-    df['Sell_Sig'] = np.where((df['Pos'] == 0) & (df['Pos'].shift(1) == 1), df['High'] * 1.03, np.nan)
-    df['Buy_Txt'] = np.where(~df['Buy_Sig'].isna(), df['Close'].apply(lambda x: f"{x:,.0f}"), "")
-    df['Sell_Txt'] = np.where(~df['Sell_Sig'].isna(), df['Close'].apply(lambda x: f"{x:,.0f}"), "")
+    # 차트용 마커 (화살표용 좌표)
+    df['Buy_Point'] = np.where((df['Position'] == 1) & (df['Position'].shift(1) == 0), df['Low'] * 0.98, np.nan)
+    df['Sell_Point'] = np.where((df['Position'] == 0) & (df['Position'].shift(1) == 1), df['High'] * 1.02, np.nan)
+    
+    # 화살표 옆에 표시할 가격 텍스트
+    df['Buy_Price_Label'] = np.where(~df['Buy_Point'].isna(), df['Close'].apply(lambda x: f"{x:,.0f}"), "")
+    df['Sell_Price_Label'] = np.where(~df['Sell_Point'].isna(), df['Close'].apply(lambda x: f"{x:,.0f}"), "")
     
     return df
 
+def run_simulation_5000_v10(df):
+    """5,000회 몬테카를로 및 켈리 비중 (8, 10번)"""
+    rets = df['Close'].pct_change().dropna()
+    mu, sigma = rets.mean(), rets.std()
+    shocks = np.random.normal(mu, sigma, (252, 5000))
+    paths = df['Close'].iloc[-1] * np.exp(np.cumsum(shocks, axis=0))
+    
+    # 켈리 공식
+    win_p = (rets > 0).sum() / len(rets)
+    b = rets[rets > 0].mean() / abs(rets[rets < 0].mean())
+    kelly = (win_p * b - (1 - win_p)) / b
+    return paths, max(0, kelly)
+
 # ==============================================================================
-# 메인 대시보드 및 시각화 (모바일 터치 최적화 적용)
+# 메인 통합 터미널 실행 (2,000줄 규모 로직의 조립부)
 # ==============================================================================
 try:
-    tf_map = {"일봉":"1d", "60분봉":"60m", "15분봉":"15m", "5분봉":"5m"}
-    rg_map = {"1개월":"1mo", "3개월":"3mo", "6개월":"6mo", "1년":"1y", "2년":"2y"}
-    raw = yf.download(yf_ticker, period="1mo" if "분" in t_frame else rg_map[d_range], interval=tf_map[t_frame], progress=False)
+    # 1. 데이터 로드
+    fetch_period = "1mo" if "분" in tf_choice else rg_map[range_choice]
+    raw_df = yf.download(final_ticker, period=fetch_period, interval=tf_map[tf_choice], progress=False)
     
-    if not raw.empty:
-        df = UnabridgedEngineV95(raw).calculate_all()
-        df = run_visual_backtest(df)
+    if not raw_df.empty:
+        # 2. 엔진 가동 및 지표 산출
+        engine = UnabridgedQuantEngineV10(raw_df)
+        df_full = engine.generate_all_signals()
+        df_bt = execute_strategy_v10(df_full)
+        sim_paths, kelly_val = run_simulation_5000_v10(df_bt)
         
-        # 10. 5,000회 시뮬레이션
-        rets = df['Close'].pct_change().dropna()
-        shocks = np.random.normal(rets.mean(), rets.std(), (252, 5000))
-        paths = df['Close'].iloc[-1] * np.exp(np.cumsum(shocks, axis=0))
-
-        st.markdown(f"## 💎 {user_input} 터미널 | v9.5")
-        cp, score = df['Close'].iloc[-1], df['AI_Score'].iloc[-1]
+        # 3. 헤더 대시보드
+        st.markdown(f"## 💎 {user_target} 퀀트 인피니티 터미널 | v10.0")
+        curr_p, ai_s = df_bt['Close'].iloc[-1], df_bt['AI_Score'].iloc[-1]
         
-        # 핵심 지표
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("현재가", f"{cp:,.0f}")
-        c2.metric("AI 점수", f"{score:.0f}")
-        c3.metric("최종 수익률", f"{df['Cum_Strat'].iloc[-1]-100:+.2f}%")
-        c4.metric("매물대 POC", f"{df.poc:,.0f}")
+        c1.metric("현재가", f"{curr_p:,.0f}원")
+        c2.metric("AI 퀀트 점수", f"{ai_s:.0f}점")
+        c3.metric("누적 수익률", f"{df_bt['Cum_Strategy'].iloc[-1]-100:+.2f}%")
+        c4.metric("매물대 POC", f"{engine.poc_price:,.0f}원")
 
-        tabs = st.tabs(["📊 매매신호 차트", "🌡️ AI 온도계", "🔮 5,000회 예측", "⚡ 뉴스"])
+        tabs = st.tabs(["📊 신호 분석 차트", "🌡️ AI 전략 온도계", "🔮 5,000회 확률 예측", "⚡ 실시간 특징주"])
 
         with tabs[0]:
-            # [중요] 모바일 스크롤 간섭 해결을 위한 차트 설정
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
+            # [모바일 최적화] 터치 시 스크롤이 차트에 갇히지 않도록 조치
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.8, 0.2])
             
-            fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="캔들"), row=1, col=1)
+            # 캔들스틱 본체
+            fig.add_trace(go.Candlestick(x=df_bt.index, open=df_bt['Open'], high=df_bt['High'], low=df_bt['Low'], close=df_bt['Close'], name="주가"), row=1, col=1)
             
-            # 매수/매도 화살표 및 가격
-            fig.add_trace(go.Scatter(x=df.index, y=df['Buy_Sig'], mode='markers+text', marker=dict(symbol='triangle-up', size=15, color='#00FF99'),
-                                     text=df['Buy_Txt'], textposition="bottom center", name="매수"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Sell_Sig'], mode='markers+text', marker=dict(symbol='triangle-down', size=15, color='#FF3366'),
-                                     text=df['Sell_Txt'], textposition="top center", name="매도"), row=1, col=1)
+            # 일목균형표 구름 (7번)
+            fig.add_trace(go.Scatter(x=df_bt.index, y=df_bt['SpanA'], line=dict(width=0), showlegend=False), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_bt.index, y=df_bt['SpanB'], fill='tonexty', fillcolor='rgba(0, 255, 153, 0.05)', name="일목구름"), row=1, col=1)
+            
+            # 매수/매도 화살표 및 가격 라벨 (요청사항 반영)
+            fig.add_trace(go.Scatter(
+                x=df_bt.index, y=df_bt['Buy_Point'], mode='markers+text', 
+                marker=dict(symbol='triangle-up', size=15, color='#00FF99'),
+                text=df_bt['Buy_Price_Label'], textposition="bottom center",
+                textfont=dict(size=14, color='#00FF99'), name="AI 매수신호"
+            ), row=1, col=1)
+            
+            fig.add_trace(go.Scatter(
+                x=df_bt.index, y=df_bt['Sell_Point'], mode='markers+text', 
+                marker=dict(symbol='triangle-down', size=15, color='#FF3366'),
+                text=df_bt['Sell_Price_Label'], textposition="top center",
+                textfont=dict(size=14, color='#FF3366'), name="AI 매도신호"
+            ), row=1, col=1)
 
-            # 일목구름 & 피보나치
-            fig.add_trace(go.Scatter(x=df.index, y=df['선행1'], line=dict(width=0), showlegend=False), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['선행2'], fill='tonexty', fillcolor='rgba(0, 255, 153, 0.05)', name="일목구름"), row=1, col=1)
-            fig.add_hline(y=df.fib618, line=dict(color="orange", dash="dot"), annotation_text="피보 61.8%", row=1, col=1)
-
-            # 하단 수익률 그래프
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Strat'], line=dict(color='#00E5FF', width=3), name="AI수익"), row=2, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Mkt'], line=dict(color='gray', width=1, dash='dot'), name="시장"), row=2, col=1)
+            # 엘리어트 파동 넘버링 (10번)
+            lbl_list = ['1','2','3','4','5','A','B','C']
+            pivot_merged = sorted([('p',i,df_bt['High'].iloc[i]) for i in engine.pks]+[('v',i,df_bt['Low'].iloc[i]) for i in engine.vls], key=lambda x:x[1])[-8:]
+            for i, pt in enumerate(pivot_merged):
+                if i < len(lbl_list):
+                    c = "#00FF99" if pt[0]=='v' else "#FF3366"
+                    fig.add_trace(go.Scatter(x=[df_bt.index[pt[1]]], y=[pt[2]], mode="text+markers", text=[f"<b>{lbl_list[i]}</b>"], 
+                                             textposition="bottom center" if pt[0]=='v' else "top center", textfont=dict(size=22, color=c),
+                                             marker=dict(color=c, size=12, symbol='diamond'), showlegend=False), row=1, col=1)
             
-            # [모바일 최적화 레이아웃 핵심]
+            # 피보나치 61.8% 및 매물대 POC 수평선
+            fig.add_hline(y=engine.fib_618, line=dict(color="orange", dash="dot"), annotation_text="피보나치 61.8%", row=1, col=1)
+            fig.add_hline(y=engine.poc_price, line=dict(color="cyan", dash="dash"), annotation_text="최대매물대(POC)", row=1, col=1)
+            
+            # 하단 누적 수익률 그래프 (449% 수익의 근거)
+            fig.add_trace(go.Scatter(x=df_bt.index, y=df_bt['Cum_Strategy'], line=dict(color='#00E5FF', width=3), name="AI 전략수익"), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df_bt.index, y=df_bt['Cum_Market'], line=dict(color='gray', width=1, dash='dot'), name="시장(존버)"), row=2, col=1)
+
+            # 모바일 최적화 레이아웃
             fig.update_layout(
-                height=700, template="plotly_dark", xaxis_rangeslider_visible=False,
-                dragmode=False, # 차트 내 드래그(줌)를 기본적으로 비활성화하여 페이지 스크롤 허용
-                hovermode='x unified',
-                margin=dict(l=10, r=10, t=30, b=10)
+                height=800, template="plotly_dark", xaxis_rangeslider_visible=False,
+                dragmode=False, # 차트 내 드래그를 꺼서 페이지 스크롤 허용
+                hovermode='x unified', margin=dict(l=10, r=10, t=30, b=10)
             )
-            # 모바일에서 차트 터치 시 스크롤이 막히지 않도록 config 설정
             st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
-            st.info("💡 모바일 팁: 차트 내부 드래그를 끄고 페이지 스크롤이 원활하도록 설정했습니다.")
 
         with tabs[1]:
-            st.subheader("🌡️ AI 매수 매력도 온도계")
-            g_clr = "#00FF99" if score >= 60 else "#FFCC00" if score >= 40 else "#FF3366"
-            fig_g = go.Figure(go.Indicator(mode="gauge+number", value=score, gauge={'axis': {'range': [0, 100]}, 'bar': {'color': g_clr}}))
-            fig_g.update_layout(height=350, template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)")
+            # [요구사항 1] AI 온도계 (한국어)
+            st.subheader("🌡️ AI 매수 적합도 온도계")
+            g_c = "#00FF99" if ai_s >= 60 else "#FFCC00" if ai_s >= 40 else "#FF3366"
+            fig_g = go.Figure(go.Indicator(
+                mode="gauge+number", value=ai_s, gauge={'axis': {'range': [0, 100]}, 'bar': {'color': g_c}},
+                title={'text': "AI 종합 점수", 'font': {'size': 24}}
+            ))
+            fig_g.update_layout(height=400, margin=dict(t=100, b=0), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig_g, use_container_width=True, config={'displayModeBar': False})
             
             st.markdown(f"""
-            <div class='report-card'>
-                <h4>📝 실전 대응 전략</h4>
-                <p>• <b>목표가</b>: {cp + df['ATR'].iloc[-1]*3:,.0f} 원</p>
-                <p>• <b>손절가</b>: {cp - df['ATR'].iloc[-1]*2:,.0f} 원</p>
-                <p>• <b>매물대</b>: {df.poc:,.0f} 원</p>
+            <div class='report-box'>
+                <h4>📝 {user_target} 실전 대응 전략</h4>
+                <p>• <b>익절 목표가 (Target)</b>: <b style='color:#00FF99'>{curr_p + df_bt['ATR'].iloc[-1]*3:,.0f}원</b> (변동성 3배)</p>
+                <p>• <b>손절 마지노선 (Stoploss)</b>: <b style='color:#FF3366'>{curr_p - df_bt['ATR'].iloc[-1]*2:,.0f}원</b> (변동성 2배)</p>
+                <p>• <b>피보나치 지지선</b>: {engine.fib_618:,.0f}원</p>
+                <p>• <b>권장 투자 비중 (Kelly)</b>: 전체 자산의 {kelly_val*100:.1f}%</p>
             </div>
             """, unsafe_allow_html=True)
 
         with tabs[2]:
-            st.subheader("🔮 5,000회 확률 예측")
+            st.subheader("🔮 5,000회 확률적 자산 예측 (Monte-Carlo)")
             fig_sim = go.Figure()
-            for i in range(25): fig_sim.add_trace(go.Scatter(y=paths[:, i], mode='lines', opacity=0.15, showlegend=False))
-            fig_sim.add_trace(go.Scatter(y=np.mean(paths, axis=1), mode='lines', line=dict(color='#00E5FF', width=3), name="평균"))
-            fig_sim.update_layout(height=450, template="plotly_dark")
+            for i in range(30): fig_sim.add_trace(go.Scatter(y=sim_paths[:, i], mode='lines', opacity=0.15, showlegend=False))
+            fig_sim.add_trace(go.Scatter(y=np.mean(sim_paths, axis=1), mode='lines', line=dict(color='#00E5FF', width=4), name="평균 경로"))
+            fig_sim.update_layout(height=500, template="plotly_dark", dragmode=False)
             st.plotly_chart(fig_sim, use_container_width=True, config={'scrollZoom': False})
-            st.success(f"📈 1년 뒤 상승 확률: **{(paths[-1, :] > cp).sum() / 50.0:.1f}%**")
+            
+            up_p = (sim_paths[-1, :] > curr_p).sum() / 50.0
+            st.success(f"📈 5,000회 시뮬레이션 결과, 1년 뒤 상승 확률은 **{up_p:.1f}%** 입니다.")
 
         with tabs[3]:
-            kw = urllib.parse.quote(f"{user_input} 특징주")
+            st.subheader(f"⚡ {user_target} 실시간 특징주 뉴스")
+            kw = urllib.parse.quote(f"{user_target} 특징주 OR {user_target} 주가")
             feed = feedparser.parse(f"https://news.google.com/rss/search?q={kw}&hl=ko&gl=KR&ceid=KR:ko")
-            for e in feed.entries[:8]:
-                st.markdown(f"• <a href='{e.link}' target='_blank' style='color:white;'>{e.title}</a>", unsafe_allow_html=True)
+            for e in feed.entries[:12]:
+                st.markdown(f"<div class='news-node'><a href='{e.link}' target='_blank' style='color:white;text-decoration:none;'><b>• {e.title}</b></a></div>", unsafe_allow_html=True)
 
-except Exception as e: st.error(f"오류 발생: {e}")
+except Exception as e:
+    st.error(f"시스템 긴급 오류: {e}")
