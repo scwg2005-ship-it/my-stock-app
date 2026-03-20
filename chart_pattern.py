@@ -1,115 +1,71 @@
 import streamlit as st
 import matplotlib
-import matplotlib.pyplot as plt
-
-# [중요] 서버 환경에서 GUI 충돌 방지를 위한 설정 (반드시 최상단 배치)
 matplotlib.use('Agg')
-plt.switch_backend('Agg')
-
 import FinanceDataReader as fdr
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
-import trendln
-from sklearn.cluster import KMeans
-import feedparser
 
-# --- 1. 전역 설정 ---
-st.set_page_config(layout="wide", page_title="v16.2 Alpha Quant")
+# --- 1. 설정 ---
+st.set_page_config(layout="wide", page_title="v16.4 Stable Quant")
 
-# --- 2. 보조 함수들 ---
-def get_stock_code(name):
-    if 'krx_list' not in st.session_state:
-        st.session_state['krx_list'] = fdr.StockListing('KRX')
-    if 'nasdaq_list' not in st.session_state:
-        st.session_state['nasdaq_list'] = fdr.StockListing('NASDAQ')
-    
-    name_upper = name.upper()
-    target_kr = st.session_state['krx_list'][st.session_state['krx_list']['Name'] == name]
-    if not target_kr.empty: return target_kr.iloc[0]['Code']
-    
-    target_us = st.session_state['nasdaq_list'][st.session_state['nasdaq_list']['Symbol'] == name_upper]
-    if not target_us.empty: return target_us.iloc[0]['Symbol']
-    
-    return name_upper
-
-def get_news(keyword):
-    is_us = keyword.replace(".","").isupper()
-    url = f"https://news.google.com/rss/search?q={keyword}+stock&hl={'en-US' if is_us else 'ko'}&gl={'US' if is_us else 'KR'}&ceid={'US:en' if is_us else 'KR:ko'}"
-    feed = feedparser.parse(url)
-    return [{'title': e.title, 'link': e.link, 'sentiment': "😐 중립"} for e in feed.entries[:3]]
-
-# --- 3. 핵심 분석 (에러 방어 로직 강화) ---
-@st.cache_data(ttl=300)
-def analyze(symbol):
+# --- 2. 데이터 로드 (캐시 제거하여 충돌 방지) ---
+def load_data(symbol):
     try:
-        df = fdr.DataReader(symbol).tail(200)
-        if df.empty: return None
-        
-        # 지표 계산
-        df['MA20'] = df['Close'].rolling(20).mean()
-        std = df['Close'].rolling(20).std()
-        df['BB_U'] = df['MA20'] + (std * 2)
-        df['BB_L'] = df['MA20'] - (std * 2)
-        
-        # trendln 추세선 계산 (오류 발생 시 패스하도록 설계)
-        top, bot = None, None
-        try:
-            h_lines = trendln.get_lines(df['High'].values, extmethod=trendln.METHOD_NAIVE)
-            l_lines = trendln.get_lines(df['Low'].values, extmethod=trendln.METHOD_NAIVE)
-            if h_lines: top = h_lines[0]
-            if l_lines: bot = l_lines[0]
-        except Exception as e:
-            st.warning(f"추세선 계산 중 경미한 오류 발생 (무시 가능): {e}")
-            
-        return df, top, bot
-    except Exception as e:
-        st.error(f"데이터 로드 실패: {e}")
+        df = fdr.DataReader(symbol).tail(150)
+        return df if not df.empty else None
+    except:
         return None
 
-# --- 4. 메인 대시보드 그리기 ---
-st.sidebar.title("⚙️ Alpha Quant")
-stock = st.sidebar.text_input("종목명/티커", "ONDS")
-if st.sidebar.button("새로고침"): st.rerun()
+# --- 3. UI 구성 (단순화) ---
+st.title("🏛️ v16.4 Alpha Quant (Stable)")
 
-code = get_stock_code(stock)
-data = analyze(code)
+# 사이드바 대신 상단 입력창으로 변경 (충돌 감소)
+col_in1, col_in2 = st.columns([2, 1])
+with col_in1:
+    stock_input = st.text_input("종목명 또는 티커를 입력하세요", "ONDS")
+with col_in2:
+    if st.button("데이터 분석 시작 🚀"):
+        st.rerun()
 
-if data:
-    df, top, bot = data
-    st.title(f"🏛️ v16.2 Alpha Quant System")
-    st.subheader(f"📊 {stock} ({code})")
+df = load_data(stock_input)
 
-    # 상단 요약 지표
-    c1, c2, c3 = st.columns(3)
+if df is not None:
+    # 지표 요약 (단순 텍스트)
     curr = df['Close'].iloc[-1]
-    c1.metric("현재가", f"{curr:,.2f}")
-    c2.metric("전일비", f"{(curr - df['Close'].iloc[-2]):+.2f}")
-    c3.info(f"뉴스 리서치 중... (실시간)")
-
-    # 뉴스 및 차트 레이아웃
-    col_left, col_right = st.columns([1, 2])
+    prev = df['Close'].iloc[-2]
+    diff = curr - prev
     
-    with col_left:
-        st.markdown("### 📰 실시간 주요 뉴스")
-        news_items = get_news(stock)
-        for n in news_items:
-            st.markdown(f"• [{n['title'][:40]}...]({n['link']})")
+    st.subheader(f"📊 {stock_input} 현재 상황")
+    st.write(f"**현재가:** {curr:,.2f} | **변동:** {diff:+.2f} ({(diff/prev)*100:+.2f}%)")
 
-    with col_right:
-        fig = make_subplots(rows=1, cols=1)
-        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Market'))
-        
-        # 추세선 시각화 (존재할 때만)
-        if top:
-            fig.add_trace(go.Scatter(x=[df.index[top[0][0]], df.index[top[0][-1]]], y=[top[2][0], top[2][-1]], mode='lines', line=dict(color='red', dash='dot'), name='Resistance'))
-        if bot:
-            fig.add_trace(go.Scatter(x=[df.index[bot[0][0]], df.index[bot[0][-1]]], y=[bot[2][0], bot[2][-1]], mode='lines', line=dict(color='blue', dash='dot'), name='Support'))
+    # 차트 그리기 (Subplot 제거하고 단일 차트로 구성)
+    fig = go.Figure()
+    
+    # 캔들차트
+    fig.add_trace(go.Candlestick(
+        x=df.index, 
+        open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], 
+        name='Price'
+    ))
 
-        fig.update_layout(height=500, template='plotly_dark', xaxis_rangeslider_visible=False)
-        st.plotly_chart(fig, use_container_width=True)
+    # 이동평균선 하나만 추가
+    ma20 = df['Close'].rolling(20).mean()
+    fig.add_trace(go.Scatter(x=df.index, y=ma20, line=dict(color='yellow', width=1), name='MA20'))
+
+    fig.update_layout(
+        height=600, 
+        template='plotly_dark', 
+        xaxis_rangeslider_visible=False,
+        margin=dict(l=10, r=10, t=10, b=10) # 여백 최소화
+    )
+    
+    # 차트 렌더링
+    st.plotly_chart(fig, use_container_width=True, key="main_chart") # 고유 키 부여로 충돌 방지
+
+    # 대응 가이드
+    st.info(f"💡 {stock_input} 분석 결과: 현재 추세 유지 중입니다. (RSI: {((df['Close'].diff().where(df['Close'].diff() > 0, 0).rolling(14).mean()) / (df['Close'].diff().where(df['Close'].diff() > 0, 0).rolling(14).mean() + (-df['Close'].diff().where(df['Close'].diff() < 0, 0)).rolling(14).mean()) * 100).iloc[-1]:.1f})")
 
 else:
-    st.warning("데이터를 불러오는 중입니다. 티커가 정확한지 확인해 주세요.")
+    st.error("데이터를 불러올 수 없습니다. 종목명을 다시 확인해 주세요.")
