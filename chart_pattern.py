@@ -7,112 +7,106 @@ from plotly.subplots import make_subplots
 from bs4 import BeautifulSoup
 from io import StringIO
 
-# --- 1. 설정 및 스타일 ---
-st.set_page_config(layout="wide", page_title="Aegis Terminus v26.0")
+# --- 1. 스타일 설정 ---
+st.set_page_config(layout="wide", page_title="Quantum Trader v29.0")
 st.markdown("""
     <style>
-    .stMetric { background-color: #0a0a0a; border: 1px solid #222; padding: 10px; border-radius: 8px; }
-    .main-title { font-size: 2rem; font-weight: 700; color: #00e5ff; text-align: center; margin-bottom: 20px; }
-    .stButton>button { width: 100%; background-color: #111; color: #00e5ff; border: 1px solid #00e5ff; }
+    .stMetric { background-color: #0d0d0d; border: 1px solid #333; padding: 10px; border-radius: 12px; }
+    .main-title { font-size: 2.2rem; font-weight: 800; color: #ffdf00; text-align: center; margin-bottom: 25px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 데이터 수집 엔진 (일봉/분봉) ---
-@st.cache_data(ttl=60) # 분봉 데이터는 더 자주 갱신
-def get_stock_data(name, mode="day"):
+# --- 2. 데이터 및 크로스 로직 엔진 ---
+@st.cache_data(ttl=300)
+def get_cross_data(name, mode="day"):
     codes = {"현대자동차": "005380", "현대차": "005380", "삼성전자": "005930", "삼전": "005930", "SK하이닉스": "000660", "에코프로": "086520"}
     code = codes.get(name.strip())
     if not code: return None
     
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
-        if mode == "day":
-            url = f"https://finance.naver.com/item/sise_day.naver?code={code}&page=1"
-        else: # 분봉(시간별 체결가 이용)
-            url = f"https://finance.naver.com/item/sise_time.naver?code={code}&page=1"
-            
-        res = requests.get(url, headers=headers, timeout=5)
-        df = pd.read_html(StringIO(res.text), flavor='lxml')[0].dropna()
+        p_count = 5 if mode in ["day", "month"] else 1
+        all_dfs = []
+        for p in range(1, p_count + 1):
+            url = f"https://finance.naver.com/item/sise_day.naver?code={code}&page={p}"
+            res = requests.get(url, headers=headers, timeout=5)
+            dfs = pd.read_html(StringIO(res.text), flavor='lxml')
+            if dfs: all_dfs.append(dfs[0].dropna())
         
-        if mode == "day":
-            df.columns = ['날짜', '종가', '전일비', '시가', '고가', '저가', '거래량']
-        else:
-            df.columns = ['시간', '종가', '전일비', '매수', '매도', '거래량', '변동량']
-            
+        df = pd.concat(all_dfs)
+        df.columns = ['날짜', '종가', '전일비', '시가', '고가', '저가', '거래량']
+        df['날짜'] = pd.to_datetime(df['날짜'])
+        df = df.set_index('날짜').sort_index()
+        for col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # 이동평균선 (5일선, 20일선)
+        df['MA5'] = df['종가'].rolling(window=5).mean()
+        df['MA20'] = df['종가'].rolling(window=20).mean()
+        
+        # 골든크로스 & 데드크로스 판정
+        df['GC'] = (df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1))
+        df['DC'] = (df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1))
+        
         return df
     except: return None
 
-# --- 3. 메인 UI ---
-st.markdown('<p class="main-title">Aegis Terminus v26.0</p>', unsafe_allow_html=True)
+# --- 3. UI 구성 ---
+st.markdown('<p class="main-title">Quantum Trader v24.0: Dual Cross</p>', unsafe_allow_html=True)
 
 with st.sidebar:
-    target_stock = st.selectbox("분석 종목 선택", ["현대자동차", "삼성전자", "SK하이닉스", "에코프로"])
+    target_stock = st.selectbox("종목 선택", ["현대자동차", "삼성전자", "SK하이닉스", "에코프로"])
     st.divider()
-    st.caption("실시간 분봉 모드 활성화")
+    st.caption("Golden & Dead Cross Mode")
 
-tab1, tab2, tab3 = st.tabs(["📈 [1P] 통합 차트", "🌡️ [2P] AI 온도계", "🔍 [3P] 뉴스 및 테마"])
+df = get_cross_data(target_stock)
 
-# --- 1페이지: 일봉 및 분봉 선택형 그래프 ---
-with tab1:
-    df_day = get_stock_data(target_stock, "day")
-    
-    if df_day is not None:
-        st.subheader(f"[{target_stock}] 차트 분석")
+if df is not None and not df.empty:
+    tab1, tab2, tab3 = st.tabs(["📈 [1P] 통합 차트", "🌡️ [2P] AI 점수판", "🔍 [3P] 테마 뉴스"])
+
+    with tab1:
+        view_mode = st.radio("주기 선택", ["일봉", "월봉"], horizontal=True)
         
-        # 분봉/일봉 선택 버튼
-        col_btn1, col_btn2, col_btn3 = st.columns(3)
-        view_mode = st.radio("차트 주기 선택", ["일봉", "1분봉", "5분봉"], horizontal=True)
-
-        # 데이터 선택 로직 (실제 API 제약상 시세 데이터를 가공하여 시각화)
-        plot_df = df_day if view_mode == "일봉" else get_stock_data(target_stock, "time")
+        # 차트 생성 (줌 방지 포함)
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.03)
         
-        if plot_df is not None:
-            fig = go.Figure()
-            
-            if view_mode == "일봉":
-                fig.add_trace(go.Candlestick(x=plot_df['날짜'], open=plot_df['시가'], high=plot_df['고가'], low=plot_df['저가'], close=plot_df['종가'], name='일봉'))
-            else:
-                # 분봉은 선형 차트로 정밀하게 표시
-                fig.add_trace(go.Scatter(x=plot_df['시간'], y=plot_df['종가'], mode='lines+markers', line=dict(color='#00e5ff'), name=view_mode))
+        # 캔들스틱
+        fig.add_trace(go.Candlestick(x=df.index, open=df['시가'], high=df['고가'], low=df['저가'], close=df['종가'],
+                                     increasing_line_color='#ff0055', decreasing_line_color='#00e5ff', name='가격'), row=1, col=1)
+        
+        # 이평선
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA5'], line=dict(color='#ffdf00', width=1.5), name='5일선'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='#ffffff', width=1.5, dash='dot'), name='20일선'), row=1, col=1)
+        
+        # 골든크로스(GC) & 데드크로스(DC) 신호
+        gc_dates = df[df['GC'] == True].index
+        for date in gc_dates:
+            fig.add_annotation(x=date, y=df.loc[date, '저가'], text="✨GOLDEN", showarrow=True, arrowhead=1, arrowcolor="#ffdf00", font=dict(color="#ffdf00"), yshift=-10, row=1, col=1)
+        
+        dc_dates = df[df['DC'] == True].index
+        for date in dc_dates:
+            fig.add_annotation(x=date, y=df.loc[date, '고가'], text="💀DEAD", showarrow=True, arrowhead=1, arrowcolor="#ff4b4b", font=dict(color="#ff4b4b"), yshift=10, row=1, col=1)
 
-            # 줌 방지 설정
-            fig.update_xaxes(fixedrange=True)
-            fig.update_yaxes(fixedrange=True)
-            fig.update_layout(height=500, template='plotly_dark', xaxis_rangeslider_visible=False, dragmode=False, margin=dict(t=10, b=10, l=10, r=10))
-            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-            
-            st.success(f"현재 {view_mode} 분석 중입니다. 패턴 및 빗각은 일봉 기준으로 계산됩니다.")
+        # 거래량
+        fig.add_trace(go.Bar(x=df.index, y=df['거래량'], marker_color='#333', name='거래량'), row=2, col=1)
+        
+        # 줌 방지 설정
+        fig.update_xaxes(fixedrange=True); fig.update_yaxes(fixedrange=True)
+        fig.update_layout(height=600, template='plotly_dark', xaxis_rangeslider_visible=False, dragmode=False)
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
-# --- 2페이지: AI 온도계 (실시간 점수 연동) ---
-with tab2:
-    st.subheader("🤖 AI 투자 온도계")
-    
-    # 세션 상태를 이용한 점수 연동
-    if 'bonus' not in st.session_state: st.session_state.bonus = 0
-    
-    c1, c2, c3 = st.columns(3)
-    with c1: 
-        if st.checkbox("매물대 지지 확인 (+10)"): st.session_state.bonus = 10
-        else: st.session_state.bonus = 0
-    with c2:
-        if st.checkbox("수렴 돌파 시도 (+15)"): st.session_state.bonus += 15
-    with c3:
-        if st.checkbox("수급 급증 포착 (+10)"): st.session_state.bonus += 10
+    with tab2:
+        st.subheader("🤖 AI 전략 점수판")
+        bonus = 0
+        if df['GC'].iloc[-1]: bonus += 20
+        if df['DC'].iloc[-1]: bonus -= 20
+        
+        final_s = 50 + bonus
+        st.metric("최종 AI 점수", f"{final_s}점", f"크로스 영향: {bonus:+d}")
+        
+        st.write("---")
+        st.checkbox("골든크로스 발생 확인", value=df['GC'].iloc[-1])
+        st.checkbox("데드크로스 회피 확인", value=not df['DC'].iloc[-1])
 
-    score = 45 + st.session_state.bonus
-    
-    fig_g = go.Figure(go.Indicator(mode="gauge+number", value=score,
-        gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#00e5ff" if score < 70 else "#ff0055"}}))
-    fig_g.update_layout(height=350, template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
-    st.plotly_chart(fig_g, use_container_width=True, config={'displayModeBar': False})
-    
-    st.write(f"### 현재 AI 권고: **{'적극 매수' if score >= 70 else '관망'}**")
-
-# --- 3페이지: 뉴스 및 테마 (한글화) ---
-with tab3:
-    st.subheader("🔍 실시간 뉴스 리포트")
-    # 뉴스 수집 로직 유지
-    st.write("- [핵심] 시장 수급 반도체로 집중")
-    st.write("- [공시] 현대차 분기 배당 확정")
-    st.divider()
-    st.table(pd.DataFrame({'테마명': ['반도체', '자동차', '2차전지'], '점수': [95, 80, 40], '판정': ['상승', '보통', '하락']}))
+    with tab3:
+        st.subheader("🔍 실시간 테마 소식")
+        st.write("현재 증시의 주요 이슈를 분석 중입니다.")
