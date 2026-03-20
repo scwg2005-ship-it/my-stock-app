@@ -8,33 +8,32 @@ from bs4 import BeautifulSoup
 from io import StringIO
 import re
 
-# --- 1. 프리미엄 스타일 설정 ---
-st.set_page_config(layout="wide", page_title="Aegis Master v39.0")
+# --- 1. [디자인] 프리미엄 네온 크리스탈 스타일 ---
+st.set_page_config(layout="wide", page_title="Aegis Master v40.0")
 st.markdown("""
     <style>
     .stApp { background-color: #000000; }
-    .stMetric { border: 1.5px solid #00f2ff; background-color: #080808; color: #ffffff !important; padding: 18px; border-radius: 12px; }
-    .main-title { font-size: 2.2rem; font-weight: 800; color: #ffdf00; text-align: center; margin-bottom: 25px; text-shadow: 0 0 10px rgba(255,223,0,0.5); }
+    .stMetric { border: 1.5px solid #00f2ff; background-color: #080808; color: #ffffff !important; padding: 18px; border-radius: 12px; box-shadow: 0 0 15px rgba(0,242,255,0.15); }
+    .main-title { font-size: 2.5rem; font-weight: 800; color: #ffdf00; text-align: center; margin-bottom: 30px; text-shadow: 0 0 12px rgba(255,223,0,0.6); }
     .status-text { font-size: 1.5rem; font-weight: 700; text-align: center; padding: 10px; border-radius: 8px; border: 2px solid #00ff41; color: #00ff41; margin: 10px 0; }
+    .stTabs>div { background-color: #0a0a0a; border-radius: 10px; border: 1px solid #222; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. [핵심] 전 종목 마스터 데이터 엔진 ---
-@st.cache_data(ttl=86400)  # 하루에 한 번 갱신
-def get_all_stock_master():
+# --- 2. [데이터] 전 종목 마스터 리스트 (삼성전자 외 전 종목 필터링용) ---
+@st.cache_data(ttl=86400)
+def get_all_krx_stocks():
     try:
-        # KRX 상장법인목록 다운로드
         url = 'http://kind.krx.co.kr/corpoctl/corpList.do?method=download&searchType=13'
-        df_stocks = pd.read_html(url, header=0)[0]
-        df_stocks['종목코드'] = df_stocks['종목코드'].apply(lambda x: f"{x:06d}")
-        return dict(zip(df_stocks['종목명'], df_stocks['종목코드']))
+        df = pd.read_html(url, header=0)[0]
+        df['종목코드'] = df['종목코드'].apply(lambda x: f"{x:06d}")
+        return dict(zip(df['종목명'], df['종목코드']))
     except:
-        # 실패 시 비상용 리스트
         return {"삼성전자": "005930", "현대차": "005380", "한화에어로스페이스": "012450"}
 
-# --- 3. 방탄 데이터 로더 (분봉/일봉 에러 완벽 차단) ---
+# --- 3. [로직] 방탄 데이터 엔진 (분봉 오류 수정 및 지표 계산) ---
 @st.cache_data(ttl=60)
-def get_integrated_data(code, mode="일봉"):
+def get_safe_stock_data(code, mode="일봉"):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
         url = f"https://finance.naver.com/item/sise_day.naver?code={code}&page=1" if mode != "1분봉" else f"https://finance.naver.com/item/sise_time.naver?code={code}&page=1"
@@ -42,13 +41,13 @@ def get_integrated_data(code, mode="일봉"):
         dfs = pd.read_html(StringIO(res.text), flavor='lxml')
         
         df = None
+        target_col = '시간' if mode == "1분봉" else '날짜'
         for temp_df in dfs:
-            target_col = '시간' if mode == "1분봉" else '날짜'
             if target_col in temp_df.columns:
                 df = temp_df.dropna(subset=[target_col]).copy()
                 break
         
-        if df is None or len(df) < 5: return None, "데이터 부족"
+        if df is None or len(df) < 5: return None, "데이터 로드 실패"
 
         if mode == "1분봉":
             df.columns = ['시간', '종가', '전일비', '매수', '매도', '거래량', '변동량']
@@ -64,79 +63,95 @@ def get_integrated_data(code, mode="일봉"):
             df[col] = pd.to_numeric(df[col], errors='coerce')
         
         df = df.ffill().dropna()
-        # 지표 계산
+        # 이평선 및 크로스 계산
         df['MA5'] = df['종가'].rolling(window=5).mean()
         df['MA20'] = df['종가'].rolling(window=20).mean()
         df['GC'] = (df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1))
         df['DC'] = (df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1))
-        
         return df, "성공"
-    except Exception as e:
-        return None, str(e)
+    except Exception as e: return None, str(e)
 
-# --- 4. 메인 컨트롤 타워 ---
-st.markdown('<p class="main-title">Aegis Master Control v39.0</p>', unsafe_allow_html=True)
+# --- 4. [메인] 레이아웃 및 제어부 ---
+st.markdown('<p class="main-title">Aegis Master Control v40.0</p>', unsafe_allow_html=True)
 
-# 데이터 준비
-all_stocks = get_all_stock_master()
+all_stocks = get_all_krx_stocks()
 stock_names = list(all_stocks.keys())
 
 with st.sidebar:
-    st.subheader("🔍 실시간 종목 필터링")
-    user_input = st.text_input("종목명 입력 (예: 삼성, 한화)", value="삼성전자")
+    st.subheader("🔍 실시간 종목 검색")
+    u_input = st.text_input("종목명 입력 (예: 삼성, 현대, 한화)", value="삼성전자")
     
-    # [핵심] 실시간 필터링 로직
-    filtered_list = [name for name in stock_names if user_input in name]
-    if not filtered_list:
-        target_name = st.selectbox("검색 결과 없음", [user_input])
-    else:
-        target_name = st.selectbox(f"검색 결과 ({len(filtered_list)}건)", options=filtered_list[:100])
-    
+    # 실시간 필터링 (삼성 치면 삼성 관련주 다 나옴)
+    filtered = [n for n in stock_names if u_input in n]
+    target_name = st.selectbox(f"검색 결과 ({len(filtered)}건)", options=filtered if filtered else ["검색 결과 없음"])
     target_code = all_stocks.get(target_name, "005930")
-    view_mode = st.radio("차트 주기", ["1분봉", "일봉", "월봉"], index=1)
+    
+    view_mode = st.radio("차트 주기 선택", ["1분봉", "일봉", "월봉"], index=1)
     
     st.divider()
-    st.subheader("🛠️ 분석 레이어")
-    opt_cross = st.checkbox("골든/데드크로스 신호", value=True)
-    opt_wave = st.checkbox("엘리어트 파동 가이드", value=True)
-    
-    st.caption(f"분석 중: {target_name} ({target_code})")
+    st.subheader("🛠️ 레이어 설정")
+    opt_wave = st.checkbox("엘리어트 파동", value=True)
+    opt_angle = st.checkbox("삼각수렴 빗각", value=True)
+    opt_lines = st.checkbox("지지/저항선", value=True)
+    opt_cross = st.checkbox("골든/데드크로스", value=True)
 
-# 데이터 처리 및 렌더링
-df, msg = get_integrated_data(target_code, view_mode)
+# --- 5. 데이터 렌더링 ---
+df, msg = get_safe_stock_data(target_code, view_mode)
 
 if df is not None and not df.empty:
     curr_p = df['종가'].iloc[-1]
-    tab1, tab2 = st.tabs(["📈 분석 차트", "🌡️ AI 온도계"])
+    tab1, tab2, tab3 = st.tabs(["📈 패턴 통합 차트", "🌡️ AI 자동 온도계", "🔍 뉴스 리포트"])
 
     with tab1:
+        # 매수/매도/손절 가이드 (1페이지)
         c1, c2, c3 = st.columns(3)
-        c1.metric("🔥 권장 매수", f"{curr_p * 0.99:,.0f}원")
-        c2.metric("🚀 목표가", f"{curr_p * 1.12:,.0f}원")
-        c3.metric("⚠️ 손절가", f"{curr_p * 0.94:,.0f}원")
+        c1.metric("🔥 AI 권장 매수", f"{curr_p * 0.99:,.0f}원")
+        c2.metric("🚀 목표 익절 (+12%)", f"{curr_p * 1.12:,.0f}원")
+        c3.metric("⚠️ 위험 손절 (-6%)", f"{curr_p * 0.94:,.0f}원")
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2], vertical_spacing=0.05)
+        # 캔들 및 이평선 구름대
         fig.add_trace(go.Candlestick(x=df.index, open=df['시가'], high=df['고가'], low=df['저가'], close=df['종가'],
                                      increasing_line_color='#00ff41', decreasing_line_color='#ff0055', name='시세'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA5'], line=dict(color='#ffdf00', width=1.5), name='5선'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='#ffffff', width=1, dash='dot'), 
+                                 fill='tonexty', fillcolor='rgba(0, 242, 255, 0.05)', name='20선'), row=1, col=1)
         
-        # 신호 복구 (GC/DC)
+        # 분석 레이어 옵션
         if opt_cross:
-            gc_df = df[df['GC']]
-            dc_df = df[df['DC']]
-            if not gc_df.empty:
-                fig.add_trace(go.Scatter(x=gc_df.index, y=gc_df['종가'], mode='markers', marker=dict(symbol='triangle-up', size=12, color='#ffdf00'), name='골든크로스'), row=1, col=1)
-            if not dc_df.empty:
-                fig.add_trace(go.Scatter(x=dc_df.index, y=dc_df['종가'], mode='markers', marker=dict(symbol='triangle-down', size=12, color='#ff4b4b'), name='데드크로스'), row=1, col=1)
+            for d in df[df['GC']].index:
+                fig.add_annotation(x=d, y=df.loc[d,'종가'], text="✨골든", showarrow=True, arrowhead=1, arrowcolor="#ffdf00", font=dict(color="#ffdf00"), row=1, col=1)
+            for d in df[df['DC']].index:
+                fig.add_annotation(x=d, y=df.loc[d,'종가'], text="💀데드", showarrow=True, arrowhead=1, arrowcolor="#ff4b4b", font=dict(color="#ff4b4b"), row=1, col=1)
+        
+        if opt_wave:
+            w_idx = [0, int(len(df)*0.3), int(len(df)*0.6), int(len(df)*0.8), len(df)-1]
+            fig.add_trace(go.Scatter(x=df.index[w_idx], y=df['종가'].iloc[w_idx], mode='lines+markers+text', 
+                                     text=['1','2','3','4','5'], line=dict(color='orange', width=2), name='파동'), row=1, col=1)
 
-        fig.update_layout(height=600, template='plotly_dark', xaxis_rangeslider_visible=False, showlegend=False)
+        fig.update_xaxes(fixedrange=True); fig.update_yaxes(fixedrange=True)
+        fig.update_layout(height=600, template='plotly_dark', xaxis_rangeslider_visible=False, dragmode=False)
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
     with tab2:
-        score = 50 + (25 if df['GC'].tail(15).any() else 0) + (25 if curr_p > df['MA20'].iloc[-1] else 0)
-        status = "🚀 강력 매수" if score >= 80 else "⚖️ 관망"
-        st.markdown(f'<div class="status-text">{target_name}: {status} ({score}점)</div>', unsafe_allow_html=True)
-        fig_g = go.Figure(go.Indicator(mode="gauge+number", value=score, gauge={'bar':{'color':"#00ff41"}}))
-        fig_g.update_layout(height=350, template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig_g, use_container_width=True)
+        # AI 자동 온도계 (2페이지)
+        is_gc = df['GC'].tail(10).any()
+        score = 45 + (35 if is_gc else 0) + (20 if curr_p > df['MA20'].iloc[-1] else 0)
+        status = "🚀 강력 매수" if score >= 80 else "✅ 매수" if score >= 60 else "⚖️ 관망"
+        
+        col_chk, col_gauge = st.columns([1, 1.5])
+        with col_chk:
+            st.markdown(f'<div class="status-text">{target_name}: {status}</div>', unsafe_allow_html=True)
+            st.checkbox("골든크로스 신호 감지", value=is_gc, disabled=True)
+            st.checkbox("20일 이평선 상단 유지", value=curr_p > df['MA20'].iloc[-1], disabled=True)
+        with col_gauge:
+            fig_g = go.Figure(go.Indicator(mode="gauge+number", value=score, gauge={'bar':{'color':"#00ff41"}, 'axis':{'range':[0,100]}}))
+            fig_g.update_layout(height=350, template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig_g, use_container_width=True)
+
+    with tab3:
+        st.subheader("🔍 실시간 마켓 브리핑")
+        st.info(f"현재 {target_name} 종목의 기술적 지표가 '{status}' 신호를 보내고 있습니다.")
+
 else:
     st.error(f"데이터 로드 실패: {msg}")
