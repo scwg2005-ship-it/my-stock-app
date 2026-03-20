@@ -1,3 +1,7 @@
+def system_log(msg, level="INFO"):
+    """시스템 로그를 콘솔에 출력하는 표준 함수"""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] [{level}] {msg}")
 # -*- coding: utf-8 -*-
 """
 Project: ALPHA_QUANT_ENGINE_V15 (Full Version)
