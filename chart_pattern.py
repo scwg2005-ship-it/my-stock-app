@@ -376,3 +376,29 @@ if __name__ == "__main__":
         print(f"▶ 권장 비중: {getattr(self, 'safe_kelly_pct', 0):.2f}% (Kelly)")
         print("==================================================")
         print("✅ 모든 분석이 성공적으로 완료되었습니다.\n")
+if __name__ == "__main__":
+    # 타겟 티커 설정: 관심도가 높은 ONDS로 전체 파이프라인 가동
+    engine = AlphaQuantSystem(ticker="ONDS", days_back=250)
+    
+    # [Phase 1: 데이터 로드 및 기술적 지표]
+    engine.fetch_market_data()
+    engine.calc_technical_indicators()
+    
+    # [Phase 2: 고등 수학 및 패턴 인식]
+    engine.calc_fibonacci_retracement()
+    engine.analyze_elliott_waves()
+    
+    # [Phase 3: 심리 분석 및 예측]
+    engine.fetch_live_news_sentiment()
+    engine.calc_quant_thermometer()
+    # engine.run_monte_carlo_simulation(days_to_predict=30) # 필요시 주석 해제하여 가동
+    
+    # [Phase 4: 리스크 관리 및 리포트]
+    engine.calc_volume_profile()
+    engine.calc_kelly_criterion(win_rate=0.58, profit_factor=1.6) # 임의의 긍정적 백테스트 스탯 가정
+    
+    # 최종 결과 보고서 출력
+    engine.generate_evidence_report()
+    
+    # 차트 시각화 (선택 사항)
+    # engine.render_professional_chart()
