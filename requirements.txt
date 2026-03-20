@@ -1,8 +1,10 @@
+streamlit
+FinanceDataReader
 pandas
 numpy
-mplfinance
-matplotlib
-scipy
-requests
+plotly
+trendln
+scikit-learn
+feedparser
 beautifulsoup4
-finance-datareader
+yfinance
