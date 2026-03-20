@@ -1,377 +1,378 @@
-def system_log(msg, level="INFO"):
-    """시스템 로그를 콘솔에 출력하는 표준 함수"""
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print(f"[{timestamp}] [{level}] {msg}")
-# -*- coding: utf-8 -*-
-"""
-Project: ALPHA_QUANT_ENGINE_V15 (Full Version)
-Module: Environment, Data Pipeline & News Feed
-Description: 1,000줄 규모의 무삭제 퀀트 시스템 상단부
-"""
-
-import os
-import sys
-import time
-import json
-import logging
-import threading
-import requests
+import yfinance as yf
 import pandas as pd
 import numpy as np
+import mplfinance as mpf
+import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
-from scipy.signal import find_peaks
-from typing import Dict, List, Optional, Union
+import warnings
 
-# ---------------------------------------------------------------------------
-# [1] 시스템 로깅 및 전역 설정 (System & Risk Constants)
-# ---------------------------------------------------------------------------
-class QuantGlobalConfig:
-    def __init__(self):
-        self.VERSION = "15.0.0_ULTIMATE"
-        self.LOG_PATH = "./logs/v15_execution.log"
-        self.TIMEZONE = "Asia/Seoul"
-        
-        # 매매 파라미터 (백데이터 근거 수치)
-        self.RISK_FREE_RATE = 0.035
-        self.DEFAULT_LEVERAGE = 1.0
-        self.SLIPPAGE = 0.0002  # 0.02% 슬리피지 반영
-        self.FEE = 0.0005      # 0.05% 수수료
-        
-        # 온도계 기준점
-        self.THERMO_HOT = 80.0
-        self.THERMO_COLD = 20.0
-        
-        # 엘리어트 파동 설정
-        self.WAVE_MIN_DISTANCE = 15
-        self.FIBO_LEVELS = [0.236, 0.382, 0.5, 0.618, 0.786]
+# 경고 메시지 무시 (깔끔한 출력을 위해)
+warnings.filterwarnings('ignore')
 
-if not os.path.exists('./logs'): os.makedirs('./logs')
-logging.basicConfig(
-    filename=QuantGlobalConfig().LOG_PATH,
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s: %(message)s'
-)
-logger = logging.getLogger("V15_ENGINE")
-
-# ---------------------------------------------------------------------------
-# [2] 실시간 뉴스피드 및 감성 분석 엔진 (News Feed & Sentiment)
-# ---------------------------------------------------------------------------
-class MarketNewsCollector:
-    """주요 증시 뉴스를 수집하고 시장 분위기를 파악하는 모듈"""
-    def __init__(self):
-        self.headers = {'User-Agent': 'Mozilla/5.0'}
-        self.news_buffer = []
-
-    def fetch_major_news(self):
-        """실제 뉴스 사이트 크롤링 로직 (상용 수준 예외처리 포함)"""
-        try:
-            # 예시: 인포맥스 또는 포털 뉴스 크롤링 (실제 연동 시 URL 수정)
-            logger.info("Fetching real-time market news headlines...")
-            # dummy news for logic representation
-            headlines = [
-                {"title": "FED 금리 동결 시사, 시장 안도감 확산", "impact": 0.8},
-                {"title": "반도체 업황 회복 시그널, 외국인 매수세 유입", "impact": 0.9},
-                {"title": "중동 지정학적 리스크 재부각, 유가 급등 우려", "impact": -0.7}
-            ]
-            self.news_buffer = headlines
-            return headlines
-        except Exception as e:
-            logger.error(f"News collection error: {str(e)}")
-            return []
-
-    def get_sentiment_score(self):
-        """뉴스 헤드라인을 분석하여 0~100점 사이의 점수 산출"""
-        if not self.news_buffer: return 50.0
-        scores = [item['impact'] for item in self.news_buffer]
-        avg_impact = np.mean(scores)
-        # -1~1 범위를 0~100으로 변환
-        return (avg_impact + 1) * 50
-
-# ---------------------------------------------------------------------------
-# [3] 고성능 데이터 핸들러 (Data Pre-processor)
-# ---------------------------------------------------------------------------
-class RawDataProcessor:
-    """캔들 데이터 생성 및 지표 산출의 기초가 되는 클래스"""
-    def __init__(self, symbol: str):
-        self.symbol = symbol
-        self.raw_df = pd.DataFrame()
-
-    def load_historical_data(self, source="csv", path=None):
-        """데이터 로드 및 무삭제 결측치 정제"""
-        if source == "csv" and path:
-            self.raw_df = pd.read_csv(path, index_col=0, parse_dates=True)
-        else:
-            # 테스트를 위한 고밀도 가상 데이터 생성기
-            dates = pd.date_range(end=datetime.now(), periods=1000, freq='H')
-            close = 100 * np.exp(np.cumsum(np.random.normal(0.0001, 0.01, 1000)))
-            self.raw_df = pd.DataFrame({
-                'open': close * 0.999, 'high': close * 1.002,
-                'low': close * 0.998, 'close': close, 'volume': np.random.randint(100, 1000, 1000)
-            }, index=dates)
-        
-        self.raw_df.ffill(inplace=True)
-        return self.raw_df
-
-    def apply_basic_indicators(self):
-        """골든크로스, RSI, ATR 등 기초 지표 산출"""
-        df = self.raw_df
-        # 이동평균선 (Golden Cross 근거)
-        df['ma5'] = df['close'].rolling(5).mean()
-        df['ma20'] = df['close'].rolling(20).mean()
-        df['ma60'] = df['close'].rolling(60).mean()
-        
-        # 골든크로스 시그널 (1: 발생, 0: 유지)
-        df['gc_signal'] = np.where((df['ma5'] > df['ma20']) & (df['ma5'].shift(1) <= df['ma20'].shift(1)), 1, 0)
-        
-        # RSI (온도계 근거 1)
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        df['rsi'] = 100 - (100 / (1 + gain/loss))
-        
-        # 변동성(ATR) (온도계 근거 2)
-        df['tr'] = np.maximum(df['high'] - df['low'], 
-                   np.maximum(abs(df['high'] - df['close'].shift()), 
-                              abs(df['low'] - df['close'].shift())))
-        df['atr'] = df['tr'].rolling(14).mean()
-        
-        return df
-        # ---------------------------------------------------------------------------
-# [4] 엘리어트 파동 자동 카운팅 엔진 (Elliott Wave Theory Engine)
-# ---------------------------------------------------------------------------
-class ElliottWaveMaster:
+class AlphaQuantSystem:
     """
-    피보나치 되돌림과 고점/저점 분석을 통한 엘리어트 5파동 자동 식별
+    v15.0 Alpha Quant System Core Engine
+    설계자: AI Assistant & User
     """
-    def __init__(self, df: pd.DataFrame):
-        self.df = df
-        self.config = QuantGlobalConfig()
-
-    def identify_pivots(self, distance: int = 20):
-        """고점(Peak)과 저점(Trough) 추출"""
-        prices = self.df['close'].values
-        peaks, _ = find_peaks(prices, distance=distance)
-        troughs, _ = find_peaks(-prices, distance=distance)
-        return peaks, troughs
-
-    def validate_wave_rules(self, p, t):
+    
+    def __init__(self, ticker="005930.KS", days_back=365):
         """
-        엘리어트 파동의 3대 불변 법칙 검증:
-        1. 2번 파동은 1번 파동의 시작점 아래로 내려갈 수 없다.
-        2. 3번 파동은 1, 3, 5파 중 가장 짧을 수 없다.
-        3. 4번 파동은 1번 파동의 고점과 겹칠 수 없다.
+        [코어 초기화 모듈]
+        기본적으로 한국 증시(삼성전자)를 타겟으로 하거나, 'BTC-USD', 'AAPL' 등 입력 가능
         """
-        # (실제 상용 엔진에서는 여기서 피보나치 비율 0.618, 1.618 등을 계산함)
-        wave_logic_results = []
+        self.ticker = ticker
+        self.end_date = datetime.now()
+        self.start_date = self.end_date - timedelta(days=days_back)
+        self.data = pd.DataFrame()
+        self.market_temperature = 50.0  # 초기 퀀트 온도
+        
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🚀 v15.0 Alpha Quant Engine 가동 준비 완료")
+        print(f"Target Ticker: {self.ticker} | Period: {days_back} Days")
+
+    def fetch_market_data(self):
+        """
+        [데이터 파이프라인 모듈]
+        Yahoo Finance API를 통한 고해상도 OHLCV 데이터 수집 및 전처리
+        """
+        print(">> 시장 데이터 수집 중...")
         try:
-            # 파동 카운팅 로직 (샘플 구현 - 실제 1,000줄 분량 핵심부)
-            for i in range(len(p)-2):
-                p1, p2, p3 = p[i], p[i+1], p[i+2]
-                # 3파가 가장 긴지 확인
-                if (self.df['close'].iloc[p2] - self.df['close'].iloc[t[i]]) > \
-                   (self.df['close'].iloc[p1] - self.df['close'].iloc[t[i]]):
-                    wave_logic_results.append(f"Wave 3 Confirmed at {self.df.index[p2]}")
-            return wave_logic_results
-        except Exception as e:
-            logger.error(f"Wave validation error: {e}")
-            return []
-
-    def get_fibonacci_retracement(self, start_price, end_price):
-        """피보나치 되돌림 구간 계산 (백데이터 근거용)"""
-        diff = end_price - start_price
-        levels = {f"Level_{str(lvl)}": end_price - (diff * lvl) for lvl in self.config.FIBO_LEVELS}
-        return levels
-
-# ---------------------------------------------------------------------------
-# [5] 몬테카를로 경로 시뮬레이션 (Monte Carlo Path Simulator)
-# ---------------------------------------------------------------------------
-class MonteCarloForecaster:
-    """
-    현재 변동성을 기반으로 향후 30일간의 자산 가격 경로 10,000개 생성
-    """
-    def __init__(self, df: pd.DataFrame):
-        self.returns = df['close'].pct_change().dropna()
-        self.last_price = df['close'].iloc[-1]
-        self.drift = self.returns.mean()
-        self.stdev = self.returns.std()
-
-    def simulate_paths(self, days: int = 30, iterations: int = 10000):
-        """기하 브라운 운동(GBM) 모델 기반 시뮬레이션"""
-        # 로그 수익률 변환
-        daily_vol = self.stdev
-        daily_drift = self.drift - (0.5 * daily_vol**2)
-        
-        # 난수 생성 (벡터 연산으로 속도 최적화)
-        z = np.random.normal(size=(days, iterations))
-        daily_returns = np.exp(daily_drift + daily_vol * z)
-        
-        # 가격 경로 생성
-        price_paths = np.zeros_like(daily_returns)
-        price_paths[0] = self.last_price * daily_returns[0]
-        
-        for t in range(1, days):
-            price_paths[t] = price_paths[t-1] * daily_returns[t]
+            df = yf.download(self.ticker, start=self.start_date, end=self.end_date, progress=False)
+            if df.empty:
+                raise ValueError("데이터를 불러오지 못했습니다. 티커 심볼을 확인하세요.")
             
-        return price_paths
+            # 멀티인덱스 컬럼 평탄화 (yfinance 최신 버전 대응)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.droplevel(1)
+                
+            self.data = df.dropna()
+            print(f">> 데이터 수집 완료: 총 {len(self.data)} 거래일 확보")
+        except Exception as e:
+            print(f"❌ 데이터 수집 오류 발생: {e}")
 
-    def get_probability_range(self, paths):
-        """미래 가격의 상/하단 확률 구간 도출"""
-        final_prices = paths[-1]
-        results = {
-            'expected_mean': np.mean(final_prices),
-            'upper_95': np.percentile(final_prices, 95),
-            'lower_5': np.percentile(final_prices, 5)
-        }
-        return results
-
-# ---------------------------------------------------------------------------
-# [6] 퀀트 온도계 알고리즘 (Quant Thermometer Core)
-# ---------------------------------------------------------------------------
-class MarketThermometer:
-    """
-    시장 과열도를 측정하여 °C 수치로 변환
-    """
-    @staticmethod
-    def calculate_temperature(df: pd.DataFrame, news_score: float):
+    def calc_technical_indicators(self):
         """
-        공식: (RSI * 0.4) + (변동성 가중치 * 0.3) + (이격도 * 0.2) + (뉴스 감성 * 0.1)
+        [1단계 - 모듈 2, 3] 이동평균선, 골든/데드크로스, MACD 등 기술적 지표 산출
         """
-        last_row = df.iloc[-1]
+        print(">> 기술적 지표 및 크로스오버 타점 연산 중...")
+        df = self.data
         
-        # 1. RSI (0~100)
-        rsi_term = last_row['rsi']
+        # 1. 이동평균선 (5일, 20일)
+        df['MA_5'] = df['Close'].rolling(window=5).mean()
+        df['MA_20'] = df['Close'].rolling(window=20).mean()
         
-        # 2. 이격도 (20일 이평선 대비)
-        disparity = (last_row['close'] / last_row['ma20']) * 100
-        disparity_term = np.clip(disparity - 50, 0, 100) # 100 기준 보정
+        # 2. 크로스오버 시그널 (▲: 골든크로스, ▼: 데드크로스)
+        df['Signal'] = 0
+        # 5일선이 20일선보다 위에 있으면 1, 아니면 0
+        df['Signal'][5:] = np.where(df['MA_5'][5:] > df['MA_20'][5:], 1, 0)
+        # Signal의 차분(diff)을 구하여 1이면 골든, -1이면 데드크로스
+        df['Position'] = df['Signal'].diff()
         
-        # 3. 변동성 (ATR 상대값)
-        vol_term = (last_row['atr'] / last_row['close']) * 1000
+        # 3. MACD (12, 26, 9)
+        exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+        exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp1 - exp2
+        df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        df['MACD_Histogram'] = df['MACD'] - df['Signal_Line']
         
-        # 최종 온도 계산
-        raw_temp = (rsi_term * 0.4) + (disparity_term * 0.3) + (vol_term * 2.0) + (news_score * 0.1)
-        final_temp = np.clip(raw_temp, 0, 100)
+        # 차트 표기를 위한 마커 위치 설정 (캔들 위/아래 여백 확보)
+        df['Buy_Marker'] = np.where(df['Position'] == 1, df['Low'] * 0.98, np.nan)
+        df['Sell_Marker'] = np.where(df['Position'] == -1, df['High'] * 1.02, np.nan)
         
-        logger.info(f"Market Temperature Calculated: {final_temp:.2f}°C")
-        return final_temp
-        # ---------------------------------------------------------------------------
-# [7] 정밀 차트 어노테이션 엔진 (Chart Annotation & Marking)
-# ---------------------------------------------------------------------------
-class QuantVisualAnnotator:
-    """
-    차트 위에 매수(▲), 매도(▼), 손절(X), 골든크로스(GC), 파동(Wave)을 박제
-    """
-    def __init__(self, df: pd.DataFrame):
-        self.df = df
-        self.mc_engine = MonteCarloForecaster(df)
-        self.wave_engine = ElliottWaveMaster(df)
+        self.data = df
 
-    def create_plot_structure(self):
-        """mplfinance를 이용한 다중 패널 차트 구성"""
-        # 보조 지표 설정 (온도계, RSI, 이평선)
+    def render_professional_chart(self):
+        """
+        [1단계 - 모듈 1] 전문가용 고해상도 캔들 차트 및 패널 시각화 (한국식 색상 적용)
+        """
+        print(">> 고해상도 퀀트 시각화 차트 렌더링 중...")
+        df = self.data[-120:] # 최근 120일(약 6개월)만 시각화하여 가독성 확보
+        
+        # 한국식 캔들 색상 설정 (상승: 빨강, 하락: 파랑)
+        mc = mpf.make_marketcolors(up='red', down='blue',
+                                   edge='inherit', wick='inherit',
+                                   volume={'up': 'red', 'down': 'blue'})
+        s = mpf.make_mpf_style(marketcolors=mc, gridstyle=':', y_on_right=False)
+        
+        # 추가 플롯 (이평선, 크로스오버 화살표, MACD)
         apds = [
-            mpf.make_addplot(self.df['ma5'], color='orange', width=0.8, panel=0),
-            mpf.make_addplot(self.df['ma20'], color='blue', width=0.8, panel=0),
-            mpf.make_addplot(self.df['temp'], panel=1, color='red', ylabel='TEMP(°C)'),
-            mpf.make_addplot(self.df['rsi'], panel=2, color='purple', ylabel='RSI', secondary_y=False)
+            mpf.make_addplot(df['MA_5'], color='magenta', width=1.5, panel=0),
+            mpf.make_addplot(df['MA_20'], color='cyan', width=1.5, panel=0),
+            mpf.make_addplot(df['Buy_Marker'], type='scatter', markersize=100, marker='^', color='red', panel=0),
+            mpf.make_addplot(df['Sell_Marker'], type='scatter', markersize=100, marker='v', color='blue', panel=0),
+            mpf.make_addplot(df['MACD'], color='black', panel=2, ylabel='MACD'),
+            mpf.make_addplot(df['Signal_Line'], color='red', panel=2),
+            mpf.make_addplot(df['MACD_Histogram'], type='bar', color='dimgray', panel=2)
         ]
         
-        # 골든크로스(GC) 화살표 데이터 생성 (근거값 시각화)
-        gc_signals = np.where(self.df['gc_signal'] == 1, self.df['low'] * 0.97, np.nan)
-        apds.append(mpf.make_addplot(gc_signals, type='scatter', markersize=120, marker='^', color='lime', panel=0))
-        
-        return apds
+        # 차트 출력
+        mpf.plot(df, type='candle', volume=True, addplot=apds, style=s,
+                 title=f"\n[v15.0 Alpha Quant] {self.ticker} Technical Analysis",
+                 ylabel='Price', ylabel_lower='Volume',
+                 figratio=(14, 8), figscale=1.2, panel_ratios=(4, 1, 1.5))
+        print(">> 차트 렌더링 완료. 시각화 창을 닫으면 다음 프로세스가 진행됩니다.")
 
-    def plot_with_full_details(self):
-        """최종 캔들스틱 차트 및 파동 라벨링 출력"""
-        system_log("Generating v15.0 Professional Candle Chart with Annotations...")
-        
-        # 엘리어트 파동 포인트 추출 및 라벨링
-        peaks, _ = self.wave_engine.identify_pivots()
-        
-        # 차트 스타일 정의 (한국식 빨강/파랑 캔들)
-        mc = mpf.make_marketcolors(up='red', down='blue', inherit=True)
-        s = mpf.make_mpf_style(marketcolors=mc, gridstyle='--', y_on_right=True)
-        
-        # 차트 실행 및 세부 어노테이션 추가
-        fig, axlist = mpf.plot(
-            self.df, type='candle', style=s, addplot=self.create_plot_structure(),
-            volume=True, figsize=(18, 11), returnfig=True,
-            title=f"\nALPHA QUANT V15.0 - {CONFIG['STRATEGY']} FULL ANALYSIS",
-            tight_layout=True
-        )
-
-        # 파동 번호(1,2,3,4,5) 직접 박제
-        for i, p_idx in enumerate(peaks[-5:]):
-            axlist[0].text(p_idx, self.df['high'].iloc[p_idx]*1.02, f"Wave {i+1}", 
-                           fontsize=10, color='darkblue', fontweight='bold', ha='center')
-
-        plt.show()
-
-# ---------------------------------------------------------------------------
-# [8] 백데이터 근거값 추출 및 최종 리포트 (Evidence Data Reporter)
-# ---------------------------------------------------------------------------
-class FinalBacktestReporter:
-    """
-    "왜 샀는가?"에 대한 모든 수치 데이터를 테이블로 출력
-    """
-    def __init__(self, df: pd.DataFrame):
-        self.df = df
-
-    def generate_evidence_table(self):
-        """매매 시점의 정밀 데이터 박제"""
-        trades = self.df[self.df['gc_signal'] == 1].copy()
-        
-        print(f"\n" + "="*85)
-        print(f"{'DATE':<12} | {'PRICE':>10} | {'RSI':>6} | {'TEMP':>7} | {'VOL_ATR':>8} | {'DECISION'}")
-        print("-" * 85)
-        
-        for date, row in trades.tail(10).iterrows():
-            decision = "STRONG BUY" if row['temp'] < 40 else "NORMAL BUY"
-            print(f"{str(date.date()):<12} | {row['close']:>10,.0f} | {row['rsi']:>6.1f} | "
-                  f"{row['temp']:>5.1f}°C | {row['atr']:>8.2f} | {decision}")
-        
-        print("="*85 + "\n")
-
-    def display_forecasting_summary(self, mc_range):
-        """몬테카를로 예측 결과 요약"""
-        print(f" [ v15.0 AI PROBABILITY FORECAST ]")
-        print(f" - Expected Price (30D): {mc_range['expected_mean']:,.2f}")
-        print(f" - Bull Case (95% Upper): {mc_range['upper_95']:,.2f}")
-        print(f" - Bear Case (5% Lower): {mc_range['lower_5']:,.2f}")
-        print(f" - Confidence Level: 95.0%\n")
-
-# ---------------------------------------------------------------------------
-# [9] 통합 실행 메인 함수 (Grand Master Execution)
-# ---------------------------------------------------------------------------
-def execute_v15_full_system():
-    # 1. 초기화 및 뉴스피드
-    news_engine = MarketNewsCollector()
-    news = news_engine.fetch_major_news()
-    sentiment = news_engine.get_sentiment_score()
-    
-    # 2. 데이터 로드 및 기초 지표
-    data_proc = RawDataProcessor("BTC/USDT")
-    df = data_proc.load_historical_data()
-    df = data_proc.apply_basic_indicators()
-    
-    # 3. 시장 온도계 산출 (뉴스 감성 반영)
-    thermo = MarketThermometer()
-    df['temp'] = [thermo.calculate_temperature(df.iloc[:i+1], sentiment) for i in range(len(df))]
-    
-    # 4. 미래 예측 (몬테카를로)
-    forecaster = MonteCarloForecaster(df)
-    paths = forecaster.simulate_paths()
-    mc_range = forecaster.get_probability_range(paths)
-    
-    # 5. 리포트 및 시각화
-    reporter = FinalBacktestReporter(df)
-    reporter.generate_evidence_table()
-    reporter.display_forecasting_summary(mc_range)
-    
-    visualizer = QuantVisualAnnotator(df)
-    visualizer.plot_with_full_details()
-
+# 파트 1 단독 테스트용 코드
 if __name__ == "__main__":
-    execute_v15_full_system()
+    # 비트코인으로 테스트
+    engine = AlphaQuantSystem(ticker="BTC-USD", days_back=200)
+    engine.fetch_market_data()
+    engine.calc_technical_indicators()
+    engine.render_professional_chart()
+    # ==========================================
+    # Phase 2: 패턴 인식 및 파동 이론 (기존 클래스에 추가)
+    # ==========================================
+    from scipy.signal import find_peaks
+
+    def calc_fibonacci_retracement(self, lookback_days=120):
+        """
+        [2단계 - 모듈 6] 피보나치 되돌림 및 확장 구간 자동 산출
+        최근 N일간의 최고점과 최저점을 기준으로 핵심 지지/저항 라인 계산
+        """
+        print(f">> 피보나치 되돌림 구간 산출 중 (기준: 최근 {lookback_days}일)...")
+        recent_data = self.data[-lookback_days:]
+        max_price = recent_data['High'].max()
+        min_price = recent_data['Low'].min()
+        diff = max_price - min_price
+        
+        # 황금비율 기반 주요 마디가
+        self.fibo_levels = {
+            "0.000 (최고점)": max_price,
+            "0.236 (단기조정)": max_price - diff * 0.236,
+            "0.382 (건전조정)": max_price - diff * 0.382,
+            "0.500 (절반되돌림)": max_price - diff * 0.500,
+            "0.618 (핵심지지)": max_price - diff * 0.618,
+            "0.786 (깊은조정)": max_price - diff * 0.786,
+            "1.000 (최저점)": min_price
+        }
+        
+        # 결과 로깅
+        for level, price in self.fibo_levels.items():
+            print(f"   - {level}: {price:.4f}")
+            
+        return self.fibo_levels
+
+    def analyze_elliott_waves(self, distance=10):
+        """
+        [2단계 - 모듈 4, 5] 엘리어트 파동 및 A-B-C 조정파동 인식 알고리즘
+        scipy의 find_peaks를 사용하여 로컬 고점(Peaks)과 저점(Troughs)을 추적
+        """
+        print(">> 엘리어트 상승 5파 및 조정 A-B-C 파동 패턴 탐색 중...")
+        prices = self.data['Close'].values
+        
+        # 노이즈를 걸러내고 의미 있는 고점/저점만 추출 (distance 파라미터 적용)
+        peaks, _ = find_peaks(prices, distance=distance)
+        troughs, _ = find_peaks(-prices, distance=distance) # 하락 반전을 위해 음수값 처리
+        
+        self.data['Peak'] = np.nan
+        self.data['Trough'] = np.nan
+        self.data['Peak'].iloc[peaks] = self.data['Close'].iloc[peaks]
+        self.data['Trough'].iloc[troughs] = self.data['Close'].iloc[troughs]
+        
+        # 주요 변곡점을 시간순으로 정렬하여 현재 파동 단계 추론
+        recent_pivots = sorted(list(peaks[-3:]) + list(troughs[-3:]))
+        if len(recent_pivots) >= 4:
+            if prices[recent_pivots[-1]] < prices[recent_pivots[-2]]:
+                self.wave_status = "📉 조정 파동 (A-B-C) 진행 또는 하락 추세 구간"
+            else:
+                self.wave_status = "📈 상승 충격파 (Impulse Wave) 전개 중"
+        else:
+            self.wave_status = "⏳ 파동 식별 대기 중 (변곡점 데이터 부족)"
+            
+        print(f">> 파동 분석 결과: {self.wave_status}")
+        return self.wave_status
+
+    # ==========================================
+    # Phase 3: 확률적 미래 예측 (기존 클래스에 추가)
+    # ==========================================
+    def run_monte_carlo_simulation(self, days_to_predict=30, num_simulations=10000):
+        """
+        [3단계 - 모듈 7] 몬테카를로 시뮬레이션
+        과거 변동성 기반으로 미래 가격 경로 10,000개를 생성하고 95% 신뢰구간 도출
+        """
+        print(f">> 몬테카를로 시뮬레이션 가동 중 (예측기간: {days_to_predict}일, 반복: {num_simulations}회)...")
+        
+        # 일간 로그 수익률 계산 (기하학적 브라운 운동 모델링을 위함)
+        log_returns = np.log(1 + self.data['Close'].pct_change()).dropna()
+        
+        mu = log_returns.mean()
+        var = log_returns.var()
+        drift = mu - (0.5 * var) # 편향(Drift) 값 계산
+        stdev = log_returns.std()
+        
+        # (예측일수 x 시뮬레이션 횟수) 정규분포 난수 매트릭스 생성
+        daily_returns = np.exp(drift + stdev * np.random.normal(0, 1, (days_to_predict, num_simulations)))
+        
+        # 미래 가격 경로 계산 매트릭스
+        price_paths = np.zeros_like(daily_returns)
+        price_paths[0] = self.data['Close'].iloc[-1] # 현재가에서 출발
+        
+        for t in range(1, days_to_predict):
+            price_paths[t] = price_paths[t - 1] * daily_returns[t]
+            
+        self.mc_price_paths = price_paths
+        final_prices = price_paths[-1]
+        
+        # 확률적 결과 추출
+        self.mc_results = {
+            "Expected_Mean": np.mean(final_prices),
+            "Median": np.median(final_prices),
+            "Upper_95%_CI": np.percentile(final_prices, 97.5),
+            "Lower_95%_CI": np.percentile(final_prices, 2.5)
+        }
+        
+        print(f"   - 30일 후 예상 평균가: {self.mc_results['Expected_Mean']:.2f}")
+        print(f"   - 95% 신뢰구간 하단(Risk): {self.mc_results['Lower_95%_CI']:.2f}")
+        print(f"   - 95% 신뢰구간 상단(Target): {self.mc_results['Upper_95%_CI']:.2f}")
+        return self.mc_results
+
+    def render_monte_carlo_chart(self):
+        """몬테카를로 시뮬레이션 결과를 독립된 서브 차트로 시각화"""
+        
+        print(">> 몬테카를로 확률 분포 시각화 렌더링 중...")
+        plt.figure(figsize=(12, 6))
+        # 10,000개 중 150개의 경로만 샘플링하여 렌더링 (메모리 최적화)
+        plt.plot(self.mc_price_paths[:, :150], color='royalblue', alpha=0.1) 
+        
+        current_price = self.data['Close'].iloc[-1]
+        plt.axhline(current_price, color='black', linestyle='--', linewidth=1.5, label=f'Current Price ({current_price:.2f})')
+        plt.axhline(self.mc_results['Upper_95%_CI'], color='red', linestyle=':', linewidth=2, label='Upper 95% CI')
+        plt.axhline(self.mc_results['Lower_95%_CI'], color='green', linestyle=':', linewidth=2, label='Lower 95% CI')
+        
+        plt.title(f"[{self.ticker}] Monte Carlo Price Simulation (30 Days / 10,000 Paths)", fontsize=14, fontweight='bold')
+        plt.xlabel("Days in Future", fontsize=12)
+        plt.ylabel("Predicted Price", fontsize=12)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+        # ==========================================
+    # Phase 3 & 4: 심리 분석, 리스크 관리, 최종 검증 (기존 클래스에 추가)
+    # ==========================================
+    import requests
+    from bs4 import BeautifulSoup
+
+    def calc_volume_profile(self, bins=20):
+        """
+        [4단계 - 모듈 12] 매물대 프로파일 (Volume Profile)
+        가격대별 거래량을 합산하여 가장 강력한 지지/저항 벽(POC: Point of Control) 시각화 데이터 생성
+        """
+        print(f">> 매물대 프로파일 분석 중 (구간 분할: {bins}개)...")
+        recent_data = self.data[-120:] # 최근 120일 기준 매물대
+        
+        # 가격 구간(Bin) 생성
+        min_price, max_price = recent_data['Low'].min(), recent_data['High'].max()
+        price_bins = np.linspace(min_price, max_price, bins)
+        
+        # 각 캔들의 거래량을 해당 가격 구간에 분배
+        volume_profile = np.zeros(bins - 1)
+        for _, row in recent_data.iterrows():
+            typical_price = (row['High'] + row['Low'] + row['Close']) / 3
+            # typical_price가 속한 구간(bin) 찾기
+            idx = np.digitize(typical_price, price_bins) - 1
+            idx = min(max(idx, 0), bins - 2)
+            volume_profile[idx] += row['Volume']
+            
+        poc_idx = np.argmax(volume_profile)
+        self.poc_price = (price_bins[poc_idx] + price_bins[poc_idx + 1]) / 2
+        
+        print(f"   - 🛡️ 최대 매물대(POC - Point of Control) 가격: {self.poc_price:.2f}")
+        return self.poc_price
+
+    def fetch_live_news_sentiment(self):
+        """
+        [3단계 - 모듈 9, 10] 실시간 증시 뉴스피드 및 감성 분석
+        Yahoo Finance에서 해당 티커의 최신 헤드라인을 스크래핑하여 호재/악재 점수화
+        """
+        print(">> 실시간 뉴스 크롤링 및 감성 분석 가동 중...")
+        url = f"https://finance.yahoo.com/quote/{self.ticker}/news"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=5)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # 야후 파이낸스 헤드라인 추출 (HTML 구조에 따라 변동 가능성 있음)
+            headlines = soup.find_all('h3', limit=5)
+            news_titles = [h.text for h in headlines if h.text]
+            
+            if not news_titles:
+                print("   - 뉴스 헤드라인을 찾을 수 없습니다. (HTML 구조 변경 또는 차단 가능성)")
+                self.sentiment_score = 50.0
+                return
+                
+            print(f"   - 최신 헤드라인 {len(news_titles)}건 수집 완료")
+            
+            # [임시 감성 분석 알고리즘] 
+            # 실제 구동 시 HuggingFace의 FinBERT 등 NLP 모델 연동 필요
+            positive_words = ['surge', 'jump', 'gain', 'profit', 'up', 'beat', 'bull', 'growth', 'contract']
+            negative_words = ['drop', 'fall', 'loss', 'miss', 'down', 'bear', 'plunge', 'lawsuit', 'investigation']
+            
+            score = 50.0 # 기본 50점
+            for title in news_titles:
+                title_lower = title.lower()
+                if any(word in title_lower for word in positive_words): score += 5
+                if any(word in title_lower for word in negative_words): score -= 5
+                
+            self.sentiment_score = max(0, min(100, score)) # 0~100 사이로 제한
+            print(f"   - 🧠 실시간 뉴스 투심 점수: {self.sentiment_score:.1f} / 100")
+            
+        except Exception as e:
+            print(f"   - ⚠️ 뉴스 크롤링 실패: {e}")
+            self.sentiment_score = 50.0
+
+    def calc_quant_thermometer(self):
+        """
+        [3단계 - 모듈 8] 퀀트 온도계 0~100°C
+        RSI, MACD, 뉴스 투심을 결합하여 시장의 과열/냉각 상태를 종합 수치화
+        """
+        print(">> 퀀트 온도계 연산 중...")
+        # 1. RSI (14일) 계산
+        delta = self.data['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs.iloc[-1]))
+        
+        # 2. MACD 위치 (0선 위면 긍정, 아래면 부정)
+        macd_val = self.data['MACD'].iloc[-1]
+        macd_score = 60 if macd_val > 0 else 40
+        
+        # 3. 투심 점수 (앞선 스크래핑 모듈에서 계산된 값)
+        sentiment = getattr(self, 'sentiment_score', 50.0)
+        
+        # 가중치 합산 (RSI 40%, MACD 30%, 뉴스투심 30%)
+        self.market_temperature = (rsi * 0.4) + (macd_score * 0.3) + (sentiment * 0.3)
+        print(f"   - 🌡️ 현재 시장 온도: {self.market_temperature:.1f}°C (과열 > 70, 침체 < 30)")
+        return self.market_temperature
+
+    def calc_kelly_criterion(self, win_rate=0.55, profit_factor=1.5):
+        """
+        [4단계 - 모듈 14] 켈리 공식 자산 배분
+        승률과 손익비(Profit Factor)를 기반으로 최적의 베팅 사이즈 산출
+        """
+        print(">> 켈리 공식 기반 최적 투자 비중 산출 중...")
+        # Kelly % = W - [(1 - W) / R] 
+        # (W: 승률, R: 평균 수익 / 평균 손실)
+        kelly_pct = win_rate - ((1 - win_rate) / profit_factor)
+        
+        # 하프 켈리 (실전 리스크 관리를 위해 절반만 투입)
+        self.safe_kelly_pct = max(0, kelly_pct / 2) * 100 
+        print(f"   - ⚖️ 최적 자산 투입 비중 (Half-Kelly): {self.safe_kelly_pct:.2f}%")
+        return self.safe_kelly_pct
+
+    def generate_evidence_report(self):
+        """
+        [4단계 - 모듈 11] 백데이터 근거값 리포트 출력
+        """
+        print("\n==================================================")
+        print(f" 🏛️ v15.0 Alpha Quant System Evidence Report ")
+        print("==================================================")
+        print(f"▶ 타겟 자산: {self.ticker}")
+        print(f"▶ 현재 가격: {self.data['Close'].iloc[-1]:.4f}")
+        print(f"▶ 시장 온도: {getattr(self, 'market_temperature', 0):.1f}°C")
+        print(f"▶ 뉴스 투심: {getattr(self, 'sentiment_score', 50):.1f} / 100")
+        print(f"▶ 최대 매물대: {getattr(self, 'poc_price', 0):.4f}")
+        print(f"▶ 파동 상태: {getattr(self, 'wave_status', 'N/A')}")
+        print(f"▶ 권장 비중: {getattr(self, 'safe_kelly_pct', 0):.2f}% (Kelly)")
+        print("==================================================")
+        print("✅ 모든 분석이 성공적으로 완료되었습니다.\n")
