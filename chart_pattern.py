@@ -10,21 +10,42 @@ import feedparser
 import urllib.parse
 
 # ==========================================
-# 1. UI/UX 전면 개편 & 스타일링
+# 1. UI/UX: 모바일 반응형 CSS 전면 적용
 # ==========================================
+# layout="wide"는 PC에서 넓게, 모바일에서는 알아서 1단으로 접히게 만듭니다.
 st.set_page_config(layout="wide", page_title="AI 프리미엄 퀀트", page_icon="👑")
+
 st.markdown("""
     <style>
+    /* 기본 테마 (다크 모드) */
     .main { background-color: #0E1117; color: #FFFFFF; }
+    
+    /* 탭 디자인 */
     .stTabs [data-baseweb="tab-list"] { gap: 10px; }
     .stTabs [data-baseweb="tab"] { font-size: 1.1rem; font-weight: bold; color: #888; }
     .stTabs [aria-selected="true"] { color: #00FF00 !important; border-bottom-color: #00FF00 !important; }
+    
+    /* AI 리포트 및 뉴스 박스 */
     .ai-report { background: #1E1E1E; padding: 20px; border-radius: 10px; border-left: 5px solid #00FF00; margin-bottom: 20px; line-height: 1.6;}
-    .news-box { background: #1a1c24; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 3px solid #ff4b4b;}
-    .news-title { font-size: 1.1rem; font-weight: bold; color: #ffffff; text-decoration: none;}
+    .news-box { background: #1a1c24; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 3px solid #00FF00; word-break: keep-all;}
+    .news-box-market { border-left: 3px solid #00BFFF; }
+    .news-title { font-size: 1.0rem; font-weight: bold; color: #ffffff; text-decoration: none;}
     .news-title:hover { color: #ff4b4b; text-decoration: underline;}
     .news-date { font-size: 0.8rem; color: #aaaaaa; margin-top: 5px;}
+    
+    /* 메트릭(현재가 등) 큰 글씨 설정 */
     div[data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 800; color: #00FF00; }
+
+    /* 📱 모바일 전용 최적화 (화면 너비 768px 이하일 때 발동) */
+    @media (max-width: 768px) {
+        .stTabs [data-baseweb="tab"] { font-size: 0.95rem; padding-left: 5px; padding-right: 5px; }
+        div[data-testid="stMetricValue"] { font-size: 1.3rem !important; }
+        .ai-report { padding: 15px; font-size: 0.95rem; }
+        .news-box { padding: 12px; }
+        .news-title { font-size: 0.95rem; }
+        h3 { font-size: 1.3rem !important; }
+        h4 { font-size: 1.1rem !important; }
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -45,26 +66,28 @@ def get_ticker_from_name(query):
     us_map = {"테슬라": "TSLA", "애플": "AAPL", "엔비디아": "NVDA", "마이크로소프트": "MSFT"}
     return us_map.get(query, query.upper())
 
-@st.cache_data(ttl=300) # 5분마다 뉴스 갱신 (서버 부하 방지)
+@st.cache_data(ttl=300)
+def get_market_news():
+    search_keyword = "증시 특징주 OR 주식 마감 OR 코스피 코스닥 OR 금리 인상"
+    encoded_query = urllib.parse.quote(search_keyword)
+    url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
+    try:
+        feed = feedparser.parse(url)
+        return [{"title": entry.title, "link": entry.link, "date": entry.published[:-4] if hasattr(entry, 'published') else "최근"} for entry in feed.entries[:7]]
+    except Exception: return []
+
+@st.cache_data(ttl=300)
 def get_latest_news(query):
-    # '종목명 + 특징주' 또는 '종목명 + 주가' 키워드로 검색하여 주가 변동 관련 뉴스 우선 확보
     search_keyword = f"{query} 특징주 OR {query} 주가 OR {query} 실적"
     encoded_query = urllib.parse.quote(search_keyword)
     url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
-    
     try:
         feed = feedparser.parse(url)
-        news_list = []
-        for entry in feed.entries[:7]: # 최신 7개만 추출
-            # 출처 및 날짜 포맷 정리
-            pub_date = entry.published[:-4] if hasattr(entry, 'published') else "최근"
-            news_list.append({"title": entry.title, "link": entry.link, "date": pub_date})
-        return news_list
-    except Exception as e:
-        return []
+        return [{"title": entry.title, "link": entry.link, "date": entry.published[:-4] if hasattr(entry, 'published') else "최근"} for entry in feed.entries[:7]]
+    except Exception: return []
 
 # ==========================================
-# 3. 사이드바 설정
+# 3. 사이드바 설정 (모바일에서는 자동으로 햄버거 메뉴로 숨겨짐)
 # ==========================================
 st.sidebar.title("⚙️ 시스템 설정")
 
@@ -153,8 +176,8 @@ if result is not None:
     else: ai_score -= 10
     ai_score = max(0, min(100, ai_score))
 
-    # --- 탭 구성 (뉴스 탭 추가) ---
-    tab1, tab2, tab3 = st.tabs(["📊 프리미엄 차트", "🧠 AI 리포트 & 온도계", "⚡ 실시간 특징주 뉴스"])
+    # --- 탭 구성 ---
+    tab1, tab2, tab3 = st.tabs(["📊 프리미엄 차트", "🧠 AI 리포트 & 온도계", "⚡ 실시간 시장 뉴스"])
 
     # [탭 1: 프리미엄 차트]
     with tab1:
@@ -166,39 +189,62 @@ if result is not None:
         if len(peaks) > 0: fig.add_trace(go.Scatter(x=df.index[peaks], y=df['High'].iloc[peaks], mode='markers', marker=dict(color='red', size=8, symbol='triangle-down'), name="고점"), row=1, col=1)
         if len(valleys) > 0: fig.add_trace(go.Scatter(x=df.index[valleys], y=df['Low'].iloc[valleys], mode='markers', marker=dict(color='lime', size=8, symbol='triangle-up'), name="저점"), row=1, col=1)
 
-        if len(peaks) >= 2: fig.add_trace(go.Scatter(x=df.index[peaks[-2:]], y=df['High'].iloc[peaks[-2:]], mode='lines', line=dict(color='pink', width=2, dash='dot'), name="저항선(빗각)"), row=1, col=1)
-        if len(valleys) >= 2: fig.add_trace(go.Scatter(x=df.index[valleys[-2:]], y=df['Low'].iloc[valleys[-2:]], mode='lines', line=dict(color='lightgreen', width=2, dash='dot'), name="지지선(빗각)"), row=1, col=1)
+        if len(peaks) >= 2: fig.add_trace(go.Scatter(x=df.index[peaks[-2:]], y=df['High'].iloc[peaks[-2:]], mode='lines', line=dict(color='pink', width=2, dash='dot'), name="저항선"), row=1, col=1)
+        if len(valleys) >= 2: fig.add_trace(go.Scatter(x=df.index[valleys[-2:]], y=df['Low'].iloc[valleys[-2:]], mode='lines', line=dict(color='lightgreen', width=2, dash='dot'), name="지지선"), row=1, col=1)
 
         colors = ['red' if val < 0 else 'green' for val in df['MACD_Hist']]
         fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'], name="MACD", marker_color=colors), row=2, col=1)
-        fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        
+        # 모바일 환경을 고려하여 차트 높이를 700에서 550으로 줄여 스크롤 공간 확보
+        fig.update_layout(height=550, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=10, b=10))
+        
+        # config 설정으로 모바일에서 차트 위를 터치해도 화면 스크롤이 가능하도록 조치
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
     # [탭 2: AI 리포트 & 온도계]
     with tab2:
         st.subheader("🌡️ AI 매수 매력도 온도계")
-        gauge_color = "red" if ai_score < 40 else ("yellow" if ai_score < 70 else "green")
+        
+        if ai_score >= 70:
+            status_text = "🟢 매수 기회 (좋음)"
+            gauge_color = "green"
+        elif ai_score >= 40:
+            status_text = "🟡 중립 및 관망 (보통)"
+            gauge_color = "yellow"
+        else:
+            status_text = "🔴 위험 및 매도 (나쁨)"
+            gauge_color = "red"
+            
         fig_gauge = go.Figure(go.Indicator(
-            mode = "gauge+number", value = ai_score,
+            mode = "gauge+number", 
+            value = ai_score,
             domain = {'x': [0, 1], 'y': [0, 1]},
-            title = {'text': "종합 퀀트 점수 (100점=적극매수)", 'font': {'size': 20, 'color': 'white'}},
+            title = {'text': f"AI 퀀트 점수<br><span style='font-size:0.7em;color:{gauge_color}'>{status_text}</span>", 'font': {'size': 20, 'color': 'white'}},
             gauge = {
                 'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "white"},
-                'bar': {'color': gauge_color}, 'bgcolor': "black", 'borderwidth': 2, 'bordercolor': "gray",
-                'steps': [{'range': [0, 40], 'color': "rgba(255,0,0,0.3)"}, {'range': [40, 70], 'color': "rgba(255,255,0,0.3)"}, {'range': [70, 100], 'color': "rgba(0,255,0,0.3)"}]
+                'bar': {'color': gauge_color}, 
+                'bgcolor': "black", 
+                'borderwidth': 2, 
+                'bordercolor': "gray",
+                'steps': [
+                    {'range': [0, 40], 'color': "rgba(255,0,0,0.3)"}, 
+                    {'range': [40, 70], 'color': "rgba(255,255,0,0.3)"}, 
+                    {'range': [70, 100], 'color': "rgba(0,255,0,0.3)"}
+                ]
             }
         ))
-        fig_gauge.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor="#0E1117", font={'color': "white"})
-        st.plotly_chart(fig_gauge, use_container_width=True)
+        # 모바일에 맞게 온도계 높이와 마진을 축소
+        fig_gauge.update_layout(height=280, margin=dict(l=10, r=10, t=50, b=10), paper_bgcolor="#0E1117", font={'color': "white"})
+        st.plotly_chart(fig_gauge, use_container_width=True, config={'displayModeBar': False})
 
         st.markdown("<div class='ai-report'>", unsafe_allow_html=True)
-        st.subheader(f"💡 {user_input} 상세 퀀트 분석")
+        st.markdown(f"### 💡 {user_input} 상세 퀀트 분석")
         
         st.markdown("#### 📐 추세 및 파동 (엘리어트 & 빗각)")
         if len(peaks) >= 2 and len(valleys) >= 2:
             peak_slope = df['High'].iloc[peaks[-1]] - df['High'].iloc[peaks[-2]]
             valley_slope = df['Low'].iloc[valleys[-1]] - df['Low'].iloc[valleys[-2]]
-            if peak_slope < 0 and valley_slope > 0: st.warning("⚠️ **[대칭 삼각수렴]** 고점은 낮아지고 저점은 높아지는 패턴입니다. 곧 방향성이 터질 수 있습니다.")
+            if peak_slope < 0 and valley_slope > 0: st.warning("⚠️ **[대칭 삼각수렴]** 고점은 낮아지고 저점은 높아집니다. 곧 방향성이 터질 수 있습니다.")
             elif peak_slope > 0 and valley_slope > 0: st.success("✅ **[상승 채널/파동]** 고점과 저점을 지속적으로 높여가는 상승 국면입니다.")
             elif peak_slope < 0 and valley_slope < 0: st.error("🚨 **[하락 채널/파동]** 고점과 저점이 모두 낮아지고 있습니다. 빗각 돌파를 기다리세요.")
             else: st.write("현재 명확한 채널 방향성보다는 박스권 패턴을 보이고 있습니다.")
@@ -222,23 +268,39 @@ if result is not None:
         else: st.write("• **이동평균선**: 주가가 20일선 아래에 있어 하방 압력 존재")
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # [탭 3: 실시간 뉴스]
+    # [탭 3: 실시간 시장 뉴스 (모바일 최적화)]
     with tab3:
-        st.subheader(f"🚨 {user_input} 실시간 마켓 레이더")
-        st.caption("가장 빠르고 주가에 영향을 줄 수 있는 최신 뉴스를 5분 단위로 업데이트합니다. (출처: Google News)")
+        st.markdown("### ⚡ 실시간 마켓 레이더")
+        st.caption("가장 빠르고 주가에 영향을 줄 수 있는 뉴스를 업데이트합니다.")
         
-        news_items = get_latest_news(user_input)
+        # 모바일에서는 st.columns가 자동으로 세로로 길게 접힙니다 (반응형 작동)
+        col_news1, col_news2 = st.columns(2)
         
-        if news_items:
-            for item in news_items:
-                st.markdown(f"""
-                <div class='news-box'>
-                    <a href='{item['link']}' target='_blank' class='news-title'>{item['title']}</a>
-                    <div class='news-date'>🕒 {item['date']}</div>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.info(f"현재 '{user_input}'와(과) 관련된 최신 주요 뉴스가 없습니다.")
+        with col_news1:
+            st.markdown("#### 🌐 국내외 증시 핫이슈")
+            market_news = get_market_news()
+            if market_news:
+                for item in market_news:
+                    st.markdown(f"""
+                    <div class='news-box news-box-market'>
+                        <a href='{item['link']}' target='_blank' class='news-title'>{item['title']}</a>
+                        <div class='news-date'>🕒 {item['date']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else: st.info("증시 주요 뉴스를 불러오지 못했습니다.")
+
+        with col_news2:
+            st.markdown(f"#### 🎯 {user_input} 관련 뉴스")
+            ticker_news = get_latest_news(user_input)
+            if ticker_news:
+                for item in ticker_news:
+                    st.markdown(f"""
+                    <div class='news-box'>
+                        <a href='{item['link']}' target='_blank' class='news-title'>{item['title']}</a>
+                        <div class='news-date'>🕒 {item['date']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else: st.info(f"현재 '{user_input}'와(과) 관련된 최신 뉴스가 없습니다.")
 
 else:
     st.error("데이터를 불러오지 못했습니다. 종목을 다시 확인해주세요.")
