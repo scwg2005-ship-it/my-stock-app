@@ -1,9 +1,10 @@
 import streamlit as st
-import yfinance as yf
+import FinanceDataReader as fdr
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from datetime import datetime, timedelta
 
 # ==========================================
 # 1. UI/UX 설정 & 스타일링
@@ -21,40 +22,48 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 스마트 검색 엔진 & 티커 매핑
+# 2. 스마트 검색 엔진 (전종목 자동화)
 # ==========================================
-TICKER_MAP = {
-    "삼성전자": "005930.KS",
-    "카카오": "035720.KS",
-    "테슬라": "TSLA",
-    "애플": "AAPL",
-    "엔비디아": "NVDA",
-    "ONDS": "ONDS",
-    "쓰리빌리언": "394990.KQ"
-}
+@st.cache_data(ttl=86400) # 하루에 한 번만 한국 거래소 종목 목록 업데이트
+def load_krx_listing():
+    return fdr.StockListing('KRX')
+
+krx_df = load_krx_listing()
 
 def get_ticker_from_name(query):
     query = query.strip()
-    if query in TICKER_MAP:
-        return TICKER_MAP[query]
-    # 숫자로만 된 한국 종목 코드 처리 (예: 005930 -> 005930.KS)
+    
+    # 1. 이미 6자리 숫자인 경우 그대로 반환 (FDR은 한국 주식 검색시 .KS, .KQ 없이 숫자만 씁니다)
     if query.isdigit() and len(query) == 6:
-        return f"{query}.KS"
-    return query.upper()
+        return query
+        
+    # 2. 한국 종목 이름으로 검색 (KRX 목록에서 찾기)
+    match = krx_df[krx_df['Name'] == query]
+    if not match.empty:
+        return match.iloc[0]['Code']
+        
+    # 3. 미국 주식 등 자주 찾는 해외 주식 매핑 (미국은 영어 코드로 직접 검색)
+    us_map = {
+        "테슬라": "TSLA",
+        "애플": "AAPL",
+        "엔비디아": "NVDA",
+        "마이크로소프트": "MSFT"
+    }
+    return us_map.get(query, query.upper())
 
 # ==========================================
 # 3. 사이드바 설정
 # ==========================================
 st.sidebar.title("⚙️ 시스템 설정")
 
-quick_tickers = ["직접 입력...", "삼성전자", "테슬라", "애플", "엔비디아", "ONDS", "쓰리빌리언"]
+quick_tickers = ["직접 입력...", "삼성전자", "풍산", "한화솔루션", "테슬라", "애플", "엔비디아", "쓰리빌리언"]
 selected_quick = st.sidebar.selectbox("⭐ 관심 종목 퀵뷰", quick_tickers)
 
-default_input = "삼성전자" if selected_quick == "직접 입력..." else selected_quick
+default_input = "풍산" if selected_quick == "직접 입력..." else selected_quick
 user_input = st.sidebar.text_input("종목명/코드 검색", value=default_input)
 
 ticker = get_ticker_from_name(user_input)
-st.sidebar.caption(f"🔍 검색된 티커: **{ticker}**")
+st.sidebar.caption(f"🔍 자동 변환된 코드: **{ticker}**")
 
 period = st.sidebar.select_slider("조회 기간", options=["3mo", "6mo", "1y", "2y"], value="6mo")
 
@@ -64,18 +73,24 @@ buy_p = st.sidebar.number_input("평균 단가", value=0.0, step=0.1)
 qty = st.sidebar.number_input("보유 수량", value=0, step=1)
 
 # ==========================================
-# 4. 데이터 엔진 (오류 수정 및 연산)
+# 4. 데이터 엔진 (FinanceDataReader 연동)
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_calc_data(symbol, p):
     try:
-        df = yf.download(symbol, period=p, interval="1d", auto_adjust=True, progress=False)
+        # FinanceDataReader를 위한 날짜 계산
+        today = datetime.today()
+        if p == "3mo": start_date = today - timedelta(days=90)
+        elif p == "6mo": start_date = today - timedelta(days=180)
+        elif p == "1y": start_date = today - timedelta(days=365)
+        elif p == "2y": start_date = today - timedelta(days=730)
+        else: start_date = today - timedelta(days=180)
+
+        # 데이터 수집 (한국 주식은 네이버/KRX에서 정확한 종가로 가져옴)
+        df = fdr.DataReader(symbol, start_date)
+        
         if df.empty or len(df) < 20:
             return None
-        
-        # 멀티인덱스 컬럼 정리
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(1)
         
         # 이동평균선
         df['MA5'] = df['Close'].rolling(5).mean()
@@ -89,7 +104,7 @@ def load_and_calc_data(symbol, p):
         df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
         df['MACD_Hist'] = df['MACD'] - df['Signal']
         
-        # 스토캐스틱 (91번 라인 수정 완료)
+        # 스토캐스틱
         low_min = df['Low'].rolling(window=14).min()
         high_max = df['High'].rolling(window=14).max()
         df['Stoch_K'] = 100 * ((df['Close'] - low_min) / (high_max - low_min))
@@ -97,7 +112,6 @@ def load_and_calc_data(symbol, p):
         
         return df
     except Exception as e:
-        st.error(f"데이터 로드 실패: {e}")
         return None
 
 # ==========================================
@@ -112,7 +126,9 @@ if df is not None:
     change = ((curr_p - prev_p) / prev_p) * 100
 
     col1, col2, col3 = st.columns(3)
-    col1.metric(f"{ticker} 현재가", f"{curr_p:,.2f}", f"{change:+.2f}%")
+    # 1000 이상이면 소수점 제거 (한국 주식 최적화), 이하면 소수점 2자리 (미국 주식 최적화)
+    price_format = f"{curr_p:,.0f}" if curr_p > 1000 else f"{curr_p:,.2f}"
+    col1.metric(f"{user_input} 현재가", price_format, f"{change:+.2f}%")
     
     if buy_p > 0 and qty > 0:
         profit = ((curr_p - buy_p) / buy_p) * 100
@@ -123,7 +139,7 @@ if df is not None:
     tab1, tab2 = st.tabs(["📊 인터랙티브 차트", "🧠 AI 전략 리포트"])
 
     with tab1:
-        # 차트 생성
+        # 차트 생성 (주가 차트 + MACD 히스토그램)
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                            vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
@@ -132,14 +148,14 @@ if df is not None:
                                    low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
         
         # 이평선
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name="MA20", line=dict(color='orange', width=1)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], name="MA60", line=dict(color='cyan', width=1)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name="MA20", line=dict(color='orange', width=1.5)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], name="MA60", line=dict(color='cyan', width=1.5)), row=1, col=1)
 
         # MACD 히스토그램
         colors = ['red' if val < 0 else 'green' for val in df['MACD_Hist']]
         fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'], name="MACD", marker_color=colors), row=2, col=1)
 
-        fig.update_layout(height=600, template="plotly_dark", 
+        fig.update_layout(height=650, template="plotly_dark", 
                           xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
@@ -151,20 +167,21 @@ if df is not None:
         last_d = df['Stoch_D'].iloc[-1]
         
         if last_k > 80:
-            st.warning("⚠️ **과매수 상태**: 스토캐스틱 지표가 80을 초과했습니다. 단기 조정에 유의하세요.")
+            st.warning("⚠️ **과매수 상태**: 스토캐스틱 지표가 80을 초과했습니다. 단기 조정 및 차익 실현에 유의하세요.")
         elif last_k < 20:
-            st.success("✅ **과매도 상태**: 지표가 20 미만입니다. 기술적 반등 가능성이 높습니다.")
+            st.success("✅ **과매도 상태**: 지표가 20 미만입니다. 과도하게 하락한 상태로 기술적 반등 가능성이 높습니다.")
         else:
             st.info("ℹ️ **추세 지속**: 현재 중립 구간이며 기존 추세를 유지하고 있습니다.")
             
         if curr_p > df['MA20'].iloc[-1]:
-            st.write("📈 현재 주가가 20일 이동평균선 위에 있어 단기 상승 흐름입니다.")
+            st.write("📈 현재 주가가 20일 이동평균선 위에 위치해 있어, **단기 상승 흐름**이 유효합니다.")
         else:
-            st.write("📉 현재 주가가 20일 이동평균선 아래에 있어 주의가 필요합니다.")
+            st.write("📉 현재 주가가 20일 이동평균선 아래에 위치해 있어, **저항을 받고 있는 하락 추세**입니다.")
+            
+        if df['MACD_Hist'].iloc[-1] > 0 and df['MACD_Hist'].iloc[-2] < 0:
+            st.write("🔥 **강력한 매수 신호**: MACD 히스토그램이 방금 양(+)으로 전환되었습니다 (골든크로스).")
+            
         st.markdown("</div>", unsafe_allow_html=True)
 
 else:
-    st.info("분석할 데이터를 찾을 수 없습니다. 왼쪽 사이드바에서 종목을 다시 검색해주세요.")
-
-# 마무리 멘트
-st.sidebar.info("Tip: 한국 종목은 '삼성전자' 또는 '005930'으로 검색하세요.")
+    st.error("데이터를 찾을 수 없거나 아직 상장된 지 얼마 안 된 종목입니다. (최소 20일의 데이터가 필요합니다)")
