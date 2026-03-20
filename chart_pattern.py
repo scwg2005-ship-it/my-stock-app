@@ -1,6 +1,11 @@
 import streamlit as st
 import matplotlib
-matplotlib.use('Agg') # 핵심: 서버 충돌 방지 설정
+import matplotlib.pyplot as plt
+
+# [중요] 서버 환경에서 GUI 충돌 방지를 위한 설정 (반드시 최상단 배치)
+matplotlib.use('Agg')
+plt.switch_backend('Agg')
+
 import FinanceDataReader as fdr
 import pandas as pd
 import numpy as np
@@ -11,10 +16,10 @@ import trendln
 from sklearn.cluster import KMeans
 import feedparser
 
-# --- 전역 설정 ---
-st.set_page_config(layout="wide", page_title="v16.1 Alpha Quant")
+# --- 1. 전역 설정 ---
+st.set_page_config(layout="wide", page_title="v16.2 Alpha Quant")
 
-# --- 종목 코드 변환 ---
+# --- 2. 보조 함수들 ---
 def get_stock_code(name):
     if 'krx_list' not in st.session_state:
         st.session_state['krx_list'] = fdr.StockListing('KRX')
@@ -30,14 +35,13 @@ def get_stock_code(name):
     
     return name_upper
 
-# --- 뉴스 크롤링 ---
 def get_news(keyword):
     is_us = keyword.replace(".","").isupper()
     url = f"https://news.google.com/rss/search?q={keyword}+stock&hl={'en-US' if is_us else 'ko'}&gl={'US' if is_us else 'KR'}&ceid={'US:en' if is_us else 'KR:ko'}"
     feed = feedparser.parse(url)
-    return [{'title': e.title, 'link': e.link, 'date': e.published} for e in feed.entries[:3]]
+    return [{'title': e.title, 'link': e.link, 'sentiment': "😐 중립"} for e in feed.entries[:3]]
 
-# --- 데이터 분석 ---
+# --- 3. 핵심 분석 (에러 방어 로직 강화) ---
 @st.cache_data(ttl=300)
 def analyze(symbol):
     try:
@@ -50,20 +54,23 @@ def analyze(symbol):
         df['BB_U'] = df['MA20'] + (std * 2)
         df['BB_L'] = df['MA20'] - (std * 2)
         
-        # 추세선 계산 (오류 방지를 위해 try-except)
+        # trendln 추세선 계산 (오류 발생 시 패스하도록 설계)
+        top, bot = None, None
         try:
             h_lines = trendln.get_lines(df['High'].values, extmethod=trendln.METHOD_NAIVE)
             l_lines = trendln.get_lines(df['Low'].values, extmethod=trendln.METHOD_NAIVE)
-            top, bot = (h_lines[0] if h_lines else None), (l_lines[0] if l_lines else None)
-        except:
-            top, bot = None, None
+            if h_lines: top = h_lines[0]
+            if l_lines: bot = l_lines[0]
+        except Exception as e:
+            st.warning(f"추세선 계산 중 경미한 오류 발생 (무시 가능): {e}")
             
         return df, top, bot
-    except:
+    except Exception as e:
+        st.error(f"데이터 로드 실패: {e}")
         return None
 
-# --- UI 그리기 ---
-st.sidebar.title("⚙️ 제어판")
+# --- 4. 메인 대시보드 그리기 ---
+st.sidebar.title("⚙️ Alpha Quant")
 stock = st.sidebar.text_input("종목명/티커", "ONDS")
 if st.sidebar.button("새로고침"): st.rerun()
 
@@ -72,29 +79,37 @@ data = analyze(code)
 
 if data:
     df, top, bot = data
-    st.title(f"🏛️ v16.1 Alpha Quant System")
-    
-    # 지표 요약
+    st.title(f"🏛️ v16.2 Alpha Quant System")
+    st.subheader(f"📊 {stock} ({code})")
+
+    # 상단 요약 지표
     c1, c2, c3 = st.columns(3)
     curr = df['Close'].iloc[-1]
     c1.metric("현재가", f"{curr:,.2f}")
-    c2.metric("20일 이평선", f"{df['MA20'].iloc[-1]:,.2f}")
-    
-    # 뉴스 섹션
-    st.markdown("### 📰 실시간 뉴스")
-    for n in get_news(stock):
-        st.markdown(f"• [{n['title']}]({n['link']})")
+    c2.metric("전일비", f"{(curr - df['Close'].iloc[-2]):+.2f}")
+    c3.info(f"뉴스 리서치 중... (실시간)")
 
-    # 차트
-    fig = make_subplots(rows=1, cols=1)
-    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'))
+    # 뉴스 및 차트 레이아웃
+    col_left, col_right = st.columns([1, 2])
     
-    if top:
-        fig.add_trace(go.Scatter(x=[df.index[top[0][0]], df.index[top[0][-1]]], y=[top[2][0], top[2][-1]], mode='lines', line=dict(color='red', dash='dot'), name='Resistance'))
-    if bot:
-        fig.add_trace(go.Scatter(x=[df.index[bot[0][0]], df.index[bot[0][-1]]], y=[bot[2][0], bot[2][-1]], mode='lines', line=dict(color='blue', dash='dot'), name='Support'))
+    with col_left:
+        st.markdown("### 📰 실시간 주요 뉴스")
+        news_items = get_news(stock)
+        for n in news_items:
+            st.markdown(f"• [{n['title'][:40]}...]({n['link']})")
 
-    fig.update_layout(height=600, template='plotly_dark', xaxis_rangeslider_visible=False)
-    st.plotly_chart(fig, use_container_width=True)
+    with col_right:
+        fig = make_subplots(rows=1, cols=1)
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Market'))
+        
+        # 추세선 시각화 (존재할 때만)
+        if top:
+            fig.add_trace(go.Scatter(x=[df.index[top[0][0]], df.index[top[0][-1]]], y=[top[2][0], top[2][-1]], mode='lines', line=dict(color='red', dash='dot'), name='Resistance'))
+        if bot:
+            fig.add_trace(go.Scatter(x=[df.index[bot[0][0]], df.index[bot[0][-1]]], y=[bot[2][0], bot[2][-1]], mode='lines', line=dict(color='blue', dash='dot'), name='Support'))
+
+        fig.update_layout(height=500, template='plotly_dark', xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig, use_container_width=True)
+
 else:
-    st.error("데이터 로드 중 오류가 발생했습니다. 티커를 확인하거나 잠시 후 다시 시도해 주세요.")
+    st.warning("데이터를 불러오는 중입니다. 티커가 정확한지 확인해 주세요.")
