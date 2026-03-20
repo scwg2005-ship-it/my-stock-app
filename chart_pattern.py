@@ -80,36 +80,46 @@ class AlphaQuantSystem:
         
         self.data = df
 
-    def render_professional_chart(self):
-        """
-        [1단계 - 모듈 1] 전문가용 고해상도 캔들 차트 및 패널 시각화 (한국식 색상 적용)
-        """
-        print(">> 고해상도 퀀트 시각화 차트 렌더링 중...")
-        df = self.data[-120:] # 최근 120일(약 6개월)만 시각화하여 가독성 확보
+def render_professional_chart(self):
+        """[1단계 - 모듈 1] 전문가용 고해상도 캔들 차트 (Streamlit + NaN 방어 로직 적용)"""
+        import streamlit as st  # Streamlit 라이브러리 추가
         
-        # 한국식 캔들 색상 설정 (상승: 빨강, 하락: 파랑)
+        print(">> 고해상도 퀀트 시각화 차트 렌더링 중...")
+        # 경고 방지를 위해 .copy() 사용
+        df = self.data[-120:].copy() 
+        
+        # 한국식 캔들 색상 설정
         mc = mpf.make_marketcolors(up='red', down='blue',
                                    edge='inherit', wick='inherit',
                                    volume={'up': 'red', 'down': 'blue'})
         s = mpf.make_mpf_style(marketcolors=mc, gridstyle=':', y_on_right=False)
         
-        # 추가 플롯 (이평선, 크로스오버 화살표, MACD)
+        # 기본 보조 지표 추가 (이평선, MACD)
         apds = [
             mpf.make_addplot(df['MA_5'], color='magenta', width=1.5, panel=0),
             mpf.make_addplot(df['MA_20'], color='cyan', width=1.5, panel=0),
-            mpf.make_addplot(df['Buy_Marker'], type='scatter', markersize=100, marker='^', color='red', panel=0),
-            mpf.make_addplot(df['Sell_Marker'], type='scatter', markersize=100, marker='v', color='blue', panel=0),
             mpf.make_addplot(df['MACD'], color='black', panel=2, ylabel='MACD'),
             mpf.make_addplot(df['Signal_Line'], color='red', panel=2),
             mpf.make_addplot(df['MACD_Histogram'], type='bar', color='dimgray', panel=2)
         ]
         
-        # 차트 출력
-        mpf.plot(df, type='candle', volume=True, addplot=apds, style=s,
+        # 🚨 [버그 픽스] 마커 데이터가 전부 NaN이 아닐 때만(즉, 매매 타점이 있을 때만) 플롯에 추가
+        if not df['Buy_Marker'].isna().all():
+            apds.append(mpf.make_addplot(df['Buy_Marker'], type='scatter', markersize=100, marker='^', color='red', panel=0))
+            
+        if not df['Sell_Marker'].isna().all():
+            apds.append(mpf.make_addplot(df['Sell_Marker'], type='scatter', markersize=100, marker='v', color='blue', panel=0))
+        
+        # 🌐 [Streamlit 호환 픽스] returnfig=True를 넣어야 Streamlit에서 피규어 객체를 받을 수 있음
+        fig, axes = mpf.plot(df, type='candle', volume=True, addplot=apds, style=s,
                  title=f"\n[v15.0 Alpha Quant] {self.ticker} Technical Analysis",
                  ylabel='Price', ylabel_lower='Volume',
-                 figratio=(14, 8), figscale=1.2, panel_ratios=(4, 1, 1.5))
-        print(">> 차트 렌더링 완료. 시각화 창을 닫으면 다음 프로세스가 진행됩니다.")
+                 figratio=(14, 8), figscale=1.2, panel_ratios=(4, 1, 1.5),
+                 returnfig=True)
+                 
+        # Streamlit 화면에 차트 렌더링
+        st.pyplot(fig)
+        print(">> 차트 렌더링 완료.")
 
 # 파트 1 단독 테스트용 코드
 if __name__ == "__main__":
