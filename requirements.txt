@@ -8,3 +8,4 @@ scikit-learn
 feedparser
 beautifulsoup4
 yfinance
+matplotlib
