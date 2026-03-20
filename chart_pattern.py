@@ -138,7 +138,7 @@ if df is not None:
         fig.add_hline(y=80, line_dash="dash", line_color="red", opacity=0.5, row=3, col=1)
         fig.add_hline(y=20, line_dash="dash", line_color="green", opacity=0.5, row=3, col=1)
 
-      fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
+        fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
         
         # 💡 모바일 스크롤 튕김 방지 (터치 줌/이동 잠금)
         fig.update_xaxes(fixedrange=True)
