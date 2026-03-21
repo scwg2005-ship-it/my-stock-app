@@ -9,8 +9,8 @@ from io import StringIO
 from bs4 import BeautifulSoup
 import time
 
-# --- 1. [디자인] 오리진 하이엔드 퀀트 UI (한국어 Obsidian 테마) ---
-st.set_page_config(layout="wide", page_title="Aegis Oracle v137.0")
+# --- 1. [디자인] VIP 전용 Obsidian 테마 (한국어) ---
+st.set_page_config(layout="wide", page_title="Aegis Oracle v140.0")
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;900&family=Pretendard:wght@400;600;900&display=swap');
@@ -21,20 +21,20 @@ st.markdown("""
     .action-title { font-size: 1.8rem; font-weight: 900; margin-bottom: 10px; }
     .profit-card { background: linear-gradient(135deg, #0044cc 0%, #001133 100%); border: 1px solid #0055ff; padding: 35px; border-radius: 30px; color: white; text-align: center; margin-bottom: 30px; }
     .guide-box { background-color: #0a0f1e; border: 1px dashed #00f2ff; padding: 20px; border-radius: 15px; margin-top: 25px; line-height: 1.8; }
-    .guide-title { color: #00f2ff; font-weight: 900; font-size: 1.2rem; margin-bottom: 10px; }
     .news-item { background: #0a0a0a; border-radius: 15px; padding: 15px; border-left: 5px solid #00f2ff; margin-bottom: 15px; }
     .recommend-box { background: rgba(255,255,255,0.03); padding: 15px; border-radius: 12px; border: 1px solid #333; margin-bottom: 10px; font-weight: 700; }
     .highlight { color: #00f2ff; font-weight: 900; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. [엔진] 무결성 하이브리드 로더 ---
+# --- 2. [엔진] 멀티 소스 뉴스 & 데이터 하이브리드 로더 ---
 @st.cache_data(ttl=60)
-def get_eternal_masterpiece_data(symbol):
+def get_multi_source_data(symbol, news_source, custom_keyword):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
         is_kr = symbol.isdigit() and len(symbol) == 6
         if is_kr:
+            # [주가 데이터 로드]
             df_list = []
             for p in range(1, 6):
                 url = f"https://finance.naver.com/item/sise_day.naver?code={symbol}&page={p}"
@@ -47,20 +47,40 @@ def get_eternal_masterpiece_data(symbol):
             df = pd.concat(df_list).reset_index(drop=True)
             df.columns = ['날짜', '종가', '전일비', '시가', '고가', '저가', '거래량']
             df['날짜'] = pd.to_datetime(df['날짜'])
+            
+            # [종목명 추출]
             m_res = requests.get(f"https://finance.naver.com/item/main.naver?code={symbol}", headers=headers)
             s_name = BeautifulSoup(m_res.text, 'html.parser').select_one('title').text.split(':')[0].strip()
-            news_res = requests.get(f"https://search.naver.com/search.naver?where=news&query={s_name} 특징주", headers=headers)
-            news_items = [{'title': i.select_one('.news_tit').text, 'link': i.select_one('.news_tit')['href']} for i in BeautifulSoup(news_res.text, 'html.parser').select('.news_area')[:10]]
+            
+            # [멀티 소스 뉴스 파싱]
+            news_items = []
+            if news_source == "다음(Daum)":
+                n_url = f"https://search.daum.net/search?w=news&q={s_name} {custom_keyword}"
+                n_res = requests.get(n_url, headers=headers)
+                n_soup = BeautifulSoup(n_res.text, 'html.parser')
+                for i in n_soup.select('ul.list_news li')[:10]:
+                    title_tag = i.select_one('.tit_main')
+                    if title_tag: news_items.append({'title': title_tag.text, 'link': title_tag['href']})
+            else: # 네이버 기반 (미래에셋 등 증권사 필터링)
+                n_url = f"https://search.naver.com/search.naver?where=news&query={s_name} {news_source} {custom_keyword}"
+                n_res = requests.get(n_url, headers=headers)
+                n_soup = BeautifulSoup(n_res.text, 'html.parser')
+                for i in n_soup.select('.news_area')[:10]:
+                    news_items.append({'title': i.select_one('.news_tit').text, 'link': i.select_one('.news_tit')['href']})
+            
             m_type, div_y = "국내", "3.2% (예상)"
         else:
+            # [미장 데이터 동일 적용]
             ticker = yf.Ticker(symbol.upper())
             df = ticker.history(period="1y").reset_index()
             if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
             df.columns = [str(c).capitalize() for c in df.columns]
             df.rename(columns={'Date':'날짜', 'Close':'종가', 'Open':'시가', 'High':'고가', 'Low':'저가', 'Volume':'거래량'}, inplace=True)
-            s_name = symbol.upper(); news_items = [{'title': f'{s_name} 인베스팅 속보', 'link': f'https://kr.investing.com/search/?q={s_name}'}]
+            s_name = symbol.upper()
+            news_items = [{'title': f'{s_name} 인베스팅 속보', 'link': f'https://kr.investing.com/search/?q={s_name}'}]
             m_type, div_y = "미국", f"{ticker.info.get('dividendYield', 0)*100:.1f}%"
 
+        # [지표 및 AI 로직 생략 없이 동일 적용]
         df = df.sort_values('날짜').reset_index(drop=True)
         for ma in [5, 20, 60, 120]:
             if len(df) >= ma: df[f'MA{ma}'] = df['종가'].rolling(ma).mean()
@@ -81,19 +101,24 @@ def get_eternal_masterpiece_data(symbol):
         return df, s_name, win_rate, avg_profit, m_type, sims, news_items, action, color, div_y
     except Exception as e: return None, str(e), 0, 0, "Error", [], [], "Error", "white", ""
 
-# --- 3. [메인 화면] ---
-s_input = st.sidebar.text_input("📊 종목 입력 (053000 / NVDA)", value="053000")
-invest_amt = st.sidebar.number_input("💰 투자 원금", value=10000000)
+# --- 3. [메인 화면 구성] ---
+with st.sidebar:
+    st.markdown("### ⚙️ 제어 센터")
+    s_input = st.text_input("📊 종목 코드", value="053000")
+    # [뉴스 소스 선택 추가]
+    news_src = st.selectbox("📰 뉴스 출처", ["다음(Daum)", "미래에셋", "한국투자증권", "삼성증권", "전체특징주"])
+    keyword = st.text_input("🔍 추가 키워드", value="리포트")
+    invest_amt = st.number_input("💰 투자 원금", value=10000000)
 
-df, s_name, win_rate, avg_profit, m_type, sims, news, ai_action, ai_color, div_y = get_eternal_masterpiece_data(s_input)
+df, s_name, win_rate, avg_profit, m_type, sims, news, ai_action, ai_color, div_y = get_multi_source_data(s_input, news_src, keyword)
 
 if df is not None and not df.empty:
     curr_p = float(df['종가'].iloc[-1]); unit = "원" if m_type == "국내" else "$"
     st.markdown(f'<div class="main-title">{s_name} 오라클 터미널</div>', unsafe_allow_html=True)
     
-    # [1] AI 최종 액션 플랜
+    # [AI 최종 액션 플랜]
     st.markdown(f"""<div class="action-box">
-        <div style="color:#888; font-weight:800; font-size:0.9rem; letter-spacing:2px; margin-bottom:10px;">🤖 ORACLE AI 최종 의사결정</div>
+        <div style="color:#888; font-weight:800; font-size:0.9rem; letter-spacing:2px; margin-bottom:10px;">🤖 ORACLE AI 최종 의사결정 ({news_src} 기반)</div>
         <div class="action-title" style="color:{ai_color};">{ai_action}</div>
         <div style="color:#cccccc;">AI 승률 <span class="highlight">{win_rate:.1f}%</span>와 확률 시나리오를 종합한 결과입니다.</div>
     </div>""", unsafe_allow_html=True)
@@ -117,15 +142,7 @@ if df is not None and not df.empty:
         fig.add_trace(go.Bar(x=df['날짜'], y=df['거래량'], marker_color='#333', name='거래량'), row=2, col=1)
         fig.update_layout(height=700, template='plotly_dark', xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, width='stretch')
-        # [복원] 전문가 조언 가이드 예시
-        st.markdown(f"""
-        <div class="guide-box">
-            <div class="guide-title">🔍 Oracle's Guide: 전문가 차트 분석법</div>
-            1. <b>상한선(빨간 점선) 근접:</b> 주가가 이 선에 닿으면 <span class="highlight">단기 고점</span>입니다. 무리한 추격 매수보다는 수익 실현을 예시로 듭니다.<br>
-            2. <b>하한선(파란 점선) 근접:</b> 주가가 이 선에 닿으면 <span class="highlight">과매도(바닥)</span> 구간입니다. 반등 확률이 높으므로 매수 타점의 예시로 봅니다.<br>
-            3. <b>거래량 폭발:</b> 차트 하단 막대가 솟구치며 파란선을 터치할 때가 가장 강력한 저점 매수 신호입니다.
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="guide-box"><div class="guide-title">🔍 전문가 조언: 차트 읽는 법</div>파란 침체선 터치 시 <b>강력 매수</b>, 빨간 과열선 돌파 시 <b>분할 매도</b>하십시오.</div>', unsafe_allow_html=True)
 
     with tabs[1]: # 2P 무지개 온도계 & 전문가 조언 예시
         col1, col2 = st.columns([1, 1.2])
@@ -136,41 +153,25 @@ if df is not None and not df.empty:
             colors = ['#ff37af' if b < 0 else '#00f2ff' for b in bins_center]
             fig_h = go.Figure(go.Bar(x=bins_center, y=counts, marker_color=colors, opacity=0.8))
             fig_h.update_layout(title='5,000회 미래 수익 시나리오 분포', template='plotly_dark', height=450); st.plotly_chart(fig_h, width='stretch')
-        # [복원] 전문가 조언 가이드 예시
-        st.markdown(f"""
-        <div class="guide-box">
-            <div class="guide-title">🧪 Oracle's Guide: 무지개 퀀트 해석법</div>
-            1. <b>AI 승률 온도:</b> 온도가 <span style="color:#00f2ff;">파란색(80% 이상)</span> 구간에 진입했다면 과거 패턴상 승률이 압도적으로 높음을 뜻합니다.<br>
-            2. <b>수익 분포표:</b> 오른쪽 파란색 막대가 우측으로 길게 뻗어 있을수록 매수 시 <span class="highlight">대박 수익</span>의 확률이 높다는 시각적 예시입니다.
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="guide-box"><div class="guide-title">🧪 전문가 조언: 무지개 퀀트 해석</div>온도가 파란색 구간에 진입했다면 과거 패턴상 승률이 압도적으로 높음을 뜻합니다.</div>', unsafe_allow_html=True)
 
-    with tabs[2]: # 3P 뉴스 피드 (URL 직결 10개)
-        st.markdown(f"#### 📰 실시간 증권 뉴스 (TOP 10)")
-        for n in news:
-            st.markdown(f"""<div class="news-item">📍 <a href='{n['link']}' style="color:#00aaff; text-decoration:none; font-weight:600;" target='_blank'>{n['title']}</a></div>""", unsafe_allow_html=True)
-        # [복원] 전문가 조언 가이드 예시
-        st.markdown(f"""
-        <div class="guide-box">
-            <div class="guide-title">📰 Oracle's Guide: 뉴스 활용법</div>
-            단순 호재 뉴스보다 <b>'공시', '수주', '흑자전환'</b> 키워드가 섞인 뉴스 링크를 클릭하여 상세 내용을 분석하는 예시를 활용하세요.
-        </div>
-        """, unsafe_allow_html=True)
+    with tabs[2]: # 3P 뉴스 피드 (멀티 소스 지원)
+        st.markdown(f"#### 📰 실시간 {news_src} 소식 (TOP 10)")
+        if news:
+            for n in news:
+                st.markdown(f"""<div class="news-item">📍 <a href='{n['link']}' style="color:#00aaff; text-decoration:none; font-weight:600;" target='_blank'>{n['title']}</a></div>""", unsafe_allow_html=True)
+        else:
+            st.warning("선택한 출처에서 뉴스를 불러올 수 없습니다. 키워드나 출처를 바꿔보세요.")
+        st.markdown(f'<div class="guide-box"><div class="guide-title">📰 전문가 조언: 뉴스 활용법</div>특정 증권사 리포트 뉴스 링크를 클릭하여 목표주가 상향 여부를 예시로 분석하십시오.</div>', unsafe_allow_html=True)
 
     with tabs[3]: # 4P 테마 섹터
         st.markdown("### 🚀 AI 선정 주도 섹터별 종목")
-        themes = {"🤖 AI/반도체": ["엔비디아 💎💎💎", "SK하이닉스 💎💎", "한미반도체 💎"], "💰 금융/저PBR": ["우리금융지주 💎💎💎", "KB금융 💎💎"], "🛡️ K-방산": ["한화에어로 💎💎💎", "현대로템 💎"]}
+        themes = {"🤖 AI/반도체": ["엔비디아 💎💎💎", "SK하이닉스 💎💎"], "💰 금융/지주": ["우리금융지주 💎💎💎", "KB금융 💎💎"], "🛡️ K-방산": ["한화에어로 💎💎💎", "현대로템 💎"]}
         cols = st.columns(3)
         for i, (t, s) in enumerate(themes.items()):
             with cols[i]:
                 st.markdown(f"<div style='color:#00f2ff; font-weight:900; font-size:1.2rem; border-left:5px solid #00f2ff; padding-left:15px; margin-bottom:15px;'>{t}</div>", unsafe_allow_html=True)
                 for stock in s: st.markdown(f"<div class='recommend-box'>🔥 {stock}</div>", unsafe_allow_html=True)
-        # [복원] 전문가 조언 가이드 예시
-        st.markdown(f"""
-        <div class="guide-box">
-            <div class="guide-title">🚀 Oracle's Guide: 테마주 순환매</div>
-            💎💎💎 종목이 차트상 과열선에 닿았다면, 아직 바닥권인 💎💎 종목으로 자금을 이동하는 <span class="highlight">순환매 전략</span>의 예시입니다.
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="guide-box"><div class="guide-title">🚀 전문가 조언: 테마주 순환매</div>💎💎💎 종목이 과열선에 닿았다면 바닥권인 💎💎 종목으로 자금을 이동하는 전략의 예시입니다.</div>', unsafe_allow_html=True)
 else:
     st.error("데이터 로드 실패.")
